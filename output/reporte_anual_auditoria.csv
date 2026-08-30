@@ -1,0 +1,9 @@
+cuenta_id,fecha,transaccion,monto,descripcion,saldo_movimientos_acumulado
+101,2024-01-01,deposito,1000.00,Ingreso mensual,1000.00
+101,2024-03-15,retiro,-500.00,Retiro parcial,500.00
+102,2024-05-22,deposito,1500.00,Ingreso mensual,1500.00
+103,2024-07-10,deposito,2000.00,Ingreso mensual,2000.00
+104,2024-09-05,compra,-100.00,Compra en tienda,-100.00
+105,2024-10-01,deposito,2500.00,Ingreso extra,2500.00
+106,2024-11-20,deposito,3000.00,Ingreso mensual,3000.00
+108,2024-12-31,deposito,2000.00,Ingreso de fin de año,2000.00
