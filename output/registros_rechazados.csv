@@ -1,0 +1,4 @@
+﻿fecha_hora,fase,item,error
+"2026-08-31T17:22:26.226480400","PROCESS","TransaccionCsv{id='4', fecha='2024-01-03', monto='0', tipo='debito'}","Monto cero para transacción ID 4"
+"2026-08-31T17:22:26.333605700","PROCESS","TransaccionCsv{id='8', fecha='2024-01-05', monto='700', tipo='debito'}","Transacción duplicada detectada para ID 8"
+"2026-08-31T17:23:21.331290700","PROCESS","CuentaAnualCsv{cuentaId='107', fecha='2024-12-25', transaccion='deposito', monto='0', descripcion='Ingreso navideño'}","Depósito inválido para cuenta 107"

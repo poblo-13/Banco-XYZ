@@ -2,9 +2,9 @@
 
 ## 1. Objetivo
 
-La propuesta consiste en modernizar tres procesos batch legacy del Banco XYZ mediante Spring Batch. La solución reemplaza un procesamiento secuencial tradicional por una arquitectura basada en Jobs, Steps y procesamiento por chunks, incorporando validación de datos, tolerancia a fallos y ejecución paralela.
+La propuesta consiste en modernizar tres procesos batch legacy del Banco XYZ mediante Spring Batch, incorporando procesamiento por chunks, ejecución paralela, validación de datos, persistencia, auditoría y tolerancia a fallos.
 
-Los procesos migrados son:
+Los procesos implementados son:
 
 - Reporte de transacciones diarias.
 - Cálculo de intereses mensuales.
@@ -12,7 +12,9 @@ Los procesos migrados son:
 
 ## 2. Arquitectura
 
-Cada proceso se estructura como un Job independiente. Los Steps de procesamiento utilizan el patrón:
+Cada proceso se implementa como un Job independiente compuesto por Steps especializados.
+
+El flujo principal es:
 
 ```text
 CSV
@@ -26,179 +28,197 @@ ItemWriter
 MySQL
 ```
 
-Para el reporte anual se agrega:
+Para el proceso anual se incorpora además un Step encargado de generar:
 
 ```text
-MySQL
- ↓
-Step de reporte
- ↓
-reporte_anual_auditoria.csv
+output/reporte_anual_auditoria.csv
 ```
 
-### Componentes principales
+Los principales componentes utilizados son:
 
-- **ItemReader:** `FlatFileItemReader` para leer los archivos CSV.
-- **SynchronizedItemStreamReader:** protege la lectura del archivo en los Steps paralelos.
-- **ItemProcessor:** valida, normaliza y transforma los registros.
-- **ItemWriter:** persiste los resultados mediante Spring Data JPA.
-- **JobRepository:** mantiene la metadata de Jobs y Steps.
-- **CustomSkipPolicy:** determina qué errores de datos pueden omitirse.
-- **BatchSkipListener:** registra los registros omitidos.
-- **SimpleAsyncTaskExecutor:** permite ejecutar chunks de forma concurrente.
+- `FlatFileItemReader`: lectura de archivos CSV.
+- `SynchronizedItemStreamReader`: lectura segura durante la ejecución concurrente.
+- `ItemProcessor`: validación y transformación de datos.
+- Spring Data JPA: persistencia en MySQL.
+- `ThreadPoolTaskExecutor`: procesamiento paralelo.
+- `CustomSkipPolicy`: manejo de registros inválidos.
+- `RetryPolicy`: recuperación frente a errores transitorios.
+- `BatchSkipListener`: registro y auditoría de elementos rechazados.
 
-## 3. Job de reporte de transacciones diarias
+## 3. Procesos implementados
 
-El `transaccionesJob` utiliza `transacciones.csv`.
+### Transacciones diarias
 
-### Validaciones y transformaciones
+`transaccionesJob` procesa `transacciones.csv`.
 
-El processor valida:
+Se validan identificadores, fechas, tipos de transacción, montos y registros duplicados.
 
-- ID numérico.
-- Fecha válida.
-- Tipo `debito` o `credito`.
-- Monto diferente de cero.
-- Consistencia del signo del monto.
-- Duplicados.
+Los débitos negativos son normalizados y los registros inválidos son omitidos mediante la política de Skip.
 
-Los débitos negativos son normalizados mediante valor absoluto. Los registros que no cumplen las reglas se envían a la política de skip.
+Resultado validado:
 
-### Resultado
+- 8 registros válidos.
+- 4 débitos.
+- 4 créditos.
+- Monto total de $9.400.
+- 2 registros rechazados.
 
-Los datos válidos se almacenan en `transacciones_procesadas`. Al finalizar se genera un resumen con cantidad de registros, débitos, créditos y monto total.
+### Intereses mensuales
 
-Con el archivo incluido, se esperan 8 registros válidos y 2 registros omitidos.
+`interesesJob` procesa `intereses.csv`.
 
-## 4. Job de cálculo de intereses mensuales
+Se validan datos de la cuenta, saldo, edad y tipo de producto. Las cuentas hipotecarias se excluyen del cálculo solicitado.
 
-El `interesesJob` procesa `intereses.csv`.
+Resultado validado:
 
-Se validan:
+- 7 cuentas procesadas.
+- 4 cuentas de ahorro.
+- 3 cuentas de préstamo.
+- Interés total calculado de $625.
 
-- Identificador de cuenta.
-- Nombre.
-- Saldo.
-- Edad.
-- Tipo de cuenta.
+### Estados de cuenta anuales
 
-Las cuentas hipotecarias son filtradas porque el requerimiento solicita aplicar intereses sobre cuentas de ahorro y préstamos.
+`cuentasAnualesJob` procesa `cuentas_anuales.csv`.
 
-Para la simulación se mantienen las tasas definidas en la actividad anterior:
+Se validan fechas, tipos de movimiento, descripción y consistencia del monto.
 
-- Ahorro: 0,5 % mensual.
-- Préstamo: 1,5 % mensual.
-
-Los resultados se almacenan en `intereses_calculados`, incluyendo saldo inicial, tasa, interés calculado y saldo final. De esta forma el nuevo saldo queda persistido en la base de datos para su consulta posterior.
-
-## 5. Job de estados de cuenta anuales
-
-El `cuentasAnualesJob` procesa `cuentas_anuales.csv`.
-
-Se aplican reglas de consistencia:
-
-- Depósito > 0.
-- Retiro < 0.
-- Compra < 0.
-- Descripción obligatoria.
-- Fecha válida.
-- Tipo de movimiento permitido.
-
-Los movimientos válidos se almacenan en `movimientos_anuales`.
-
-Luego, un Step independiente ordena los movimientos por cuenta y fecha y genera:
-
-`output/reporte_anual_auditoria.csv`
-
-El reporte incluye el saldo acumulado por cuenta, facilitando su utilización para auditoría.
-
-## 6. Manejo de errores y excepciones
-
-La solución utiliza `faultTolerant()` en los Steps de procesamiento.
-
-En lugar de detener todo el Job frente a un dato incorrecto, los errores de validación son evaluados por `CustomSkipPolicy`.
-
-La política permite:
-
-- Omitir excepciones de tipo `IllegalArgumentException`.
-- Permitir hasta 10 omisiones por Step.
-- Detener el procesamiento cuando se supera el límite.
-- No ocultar errores de infraestructura o persistencia.
-
-Esto permite separar los errores producidos por datos incorrectos de los errores técnicos que requieren detener el proceso.
-
-## 7. Política personalizada de tolerancia a fallos
-
-La clase `CustomSkipPolicy` implementa `SkipPolicy`.
-
-La decisión se basa en dos condiciones:
+Los movimientos válidos se almacenan en MySQL y posteriormente se genera:
 
 ```text
-¿El error corresponde a una validación de datos?
-        │
-        ├── No → no se omite y el Step falla
-        │
-        └── Sí
-             │
-             ├── skipCount < 10 → omitir y continuar
-             │
-             └── skipCount >= 10 → detener el Step
+output/reporte_anual_auditoria.csv
 ```
 
-Además, `BatchSkipListener` registra los registros omitidos para facilitar el diagnóstico y la auditoría.
+Resultado validado:
 
-No se utiliza retry para datos inválidos porque volver a procesar exactamente el mismo registro no corrige su contenido.
+- 8 movimientos incluidos.
+- 1 registro inválido rechazado.
 
-## 8. Política de escalamiento
+## 4. Procesamiento paralelo
 
-La actividad solicita tres hilos de ejecución paralela con chunks de tamaño 5.
+La ejecución paralela se implementa mediante `ThreadPoolTaskExecutor`.
 
-La configuración utilizada es:
+Los parámetros se externalizan en `application.properties`:
+
+```properties
+batch.chunk-size=5
+batch.core-pool-size=2
+batch.max-pool-size=2
+batch.queue-capacity=10
+```
+
+Los Steps utilizan `.taskExecutor(batchTaskExecutor)` para ejecutar chunks concurrentemente.
+
+Como `FlatFileItemReader` no es thread-safe, se utiliza `SynchronizedItemStreamReader` para proteger la lectura y mantener la integridad de los datos.
+
+## 5. Comparación y selección de parámetros
+
+Para seleccionar la configuración se realizaron distintas pruebas sobre `transaccionesJob`.
+
+| Configuración | Step principal | Job completo |
+|---|---:|---:|
+| 1 hilo / chunk 5 | 174 ms | 649 ms |
+| **2 hilos / chunk 5** | **144 ms** | **622 ms** |
+| 3 hilos / chunk 5 | 148 ms | 631 ms |
+| 2 hilos / chunk 2 | 170 ms | 645 ms |
+| 2 hilos / chunk 1 | 209 ms | 693 ms |
+
+La mejor configuración observada fue utilizar **2 hilos y chunks de 5 registros**.
+
+Las pruebas también permitieron comprobar que aumentar la cantidad de hilos o reducir demasiado el tamaño del chunk no necesariamente mejora el rendimiento.
+
+Debido al tamaño reducido de los archivos utilizados, los tiempos obtenidos se consideran referenciales.
+
+## 6. Tolerancia a fallos
+
+Los Steps de procesamiento utilizan `faultTolerant()` y diferencian entre errores de datos y errores transitorios.
+
+### Skip Policy
+
+La clase `CustomSkipPolicy` permite omitir únicamente errores de validación representados por `IllegalArgumentException`.
+
+El límite se configura mediante:
+
+```properties
+batch.max-skips=10
+```
+
+Cuando el límite es superado, el Step deja de continuar con nuevos rechazos.
+
+Los errores de infraestructura o persistencia no son ocultados mediante esta política.
+
+### Retry Policy
+
+Los errores transitorios derivados de `TransientDataAccessException` utilizan una política de reintentos.
+
+La configuración es:
+
+```properties
+batch.retry-limit=3
+batch.retry-initial-interval=500
+batch.retry-multiplier=2.0
+batch.retry-max-interval=2000
+```
+
+Esto permite realizar hasta 3 reintentos con espera incremental ante una falla temporal.
+
+Si el problema persiste después de los reintentos, el Step falla en lugar de ignorar el error.
+
+No se utiliza Retry para registros inválidos, ya que volver a procesar el mismo dato no corrige su contenido.
+
+## 7. Auditoría de errores
+
+`BatchSkipListener` utiliza SLF4J para registrar los elementos rechazados con nivel `WARN`.
+
+Además, los registros omitidos quedan almacenados en:
 
 ```text
-Hilos concurrentes: 3
-Chunk: 5 registros
+output/registros_rechazados.csv
 ```
 
-El `SimpleAsyncTaskExecutor` establece un límite de concurrencia de 3. Los Steps utilizan `.taskExecutor(batchTaskExecutor)` y `.chunk(5)`.
+El archivo registra:
 
-Debido a que `FlatFileItemReader` no es thread-safe, se utiliza `SynchronizedItemStreamReader`, evitando que dos hilos lean simultáneamente el mismo estado interno del archivo.
+- Fecha y hora.
+- Fase del procesamiento.
+- Elemento rechazado.
+- Motivo del error.
 
-El paralelismo se aplica al procesamiento de los chunks, mientras la lectura del archivo se sincroniza para mantener la integridad de la secuencia de entrada.
+La escritura se encuentra sincronizada para evitar conflictos entre los hilos de ejecución.
 
-## 9. Persistencia
+Esto permite conservar evidencia de los registros problemáticos para auditoría y posible reproceso.
 
-La base de datos seleccionada es MySQL.
+## 8. Pool de conexiones
 
-Spring Data JPA permite persistir:
+Se utiliza HikariCP para controlar las conexiones disponibles hacia MySQL.
+
+Configuración:
+
+```properties
+spring.datasource.hikari.maximum-pool-size=8
+spring.datasource.hikari.minimum-idle=3
+spring.datasource.hikari.connection-timeout=30000
+```
+
+De esta forma, el procesamiento concurrente dispone de un pool de conexiones administrado y limitado.
+
+## 9. Persistencia e integridad
+
+Los resultados se almacenan en MySQL mediante Spring Data JPA.
+
+Las principales tablas utilizadas son:
 
 - `transacciones_procesadas`
 - `intereses_calculados`
 - `movimientos_anuales`
 
-Spring Batch utiliza además sus tablas de metadata para controlar las ejecuciones.
+Además, Spring Batch mantiene sus propias tablas de metadata para controlar las ejecuciones de Jobs y Steps.
 
-Los valores monetarios se representan mediante `BigDecimal`, evitando errores de precisión propios de tipos de punto flotante.
+Los valores monetarios utilizan `BigDecimal` y las fechas `LocalDate`.
 
-Las fechas se representan mediante `LocalDate`.
+Cada Job limpia sus resultados anteriores antes de iniciar una nueva ejecución, evitando inconsistencias entre distintas pruebas.
 
-## 10. Integridad y consistencia
+## 10. Seguridad de configuración
 
-Las reglas de validación se aplican antes de la escritura.
-
-Esto permite que solamente los registros que cumplen las reglas de negocio sean almacenados.
-
-Además:
-
-- Cada Job inicia limpiando sus resultados anteriores para evitar duplicados al ejecutar una nueva instancia.
-- Las transacciones se procesan por chunks.
-- Los errores de datos quedan registrados.
-- Los errores no recuperables provocan el fallo del Step.
-- El reporte anual se genera después de completar la persistencia.
-
-## 11. Seguridad de configuración
-
-La contraseña de MySQL no se almacena en el código fuente.
+La contraseña de MySQL no se almacena directamente en el código.
 
 Se utiliza:
 
@@ -206,12 +226,31 @@ Se utiliza:
 spring.datasource.password=${DB_PASSWORD}
 ```
 
-La variable de entorno debe configurarse localmente antes de ejecutar el proyecto.
+La variable debe configurarse localmente antes de ejecutar el proyecto.
+
+## 11. Pruebas
+
+Se implementaron pruebas para validar la carga del contexto de Spring Boot y la política de Retry.
+
+El test de Retry verifica:
+
+- Recuperación frente a un error transitorio.
+- Ausencia de reintentos frente a un error no transitorio.
+
+Resultado final:
+
+```text
+Tests run: 3
+Failures: 0
+Errors: 0
+Skipped: 0
+BUILD SUCCESS
+```
 
 ## 12. Conclusión
 
-La solución permite migrar los tres procesos legacy del Banco XYZ hacia una implementación moderna con Spring Batch.
+La solución moderniza los tres procesos batch del Banco XYZ mediante una arquitectura basada en Jobs y Steps independientes.
 
-La arquitectura incorpora los elementos solicitados en la actividad: lectura de CSV, procesamiento y validación mediante `ItemProcessor`, persistencia en una base de datos relacional, manejo de errores, política personalizada de tolerancia a fallos y escalamiento mediante tres hilos concurrentes con chunks de cinco registros.
+Se incorpora procesamiento paralelo configurable, selección de parámetros mediante pruebas comparativas, tolerancia a fallos mediante Skip y Retry, auditoría de registros rechazados, persistencia en MySQL y administración de conexiones mediante HikariCP.
 
-Con esto se obtiene una solución más controlada y mantenible, capaz de continuar procesando datos válidos cuando encuentra errores aislados y de detenerse ante situaciones que comprometan la integridad del procesamiento.
+La configuración final de 2 hilos y chunks de 5 registros presentó el mejor resultado observado en las pruebas realizadas, manteniendo correctamente la integridad y los resultados de los tres procesos.

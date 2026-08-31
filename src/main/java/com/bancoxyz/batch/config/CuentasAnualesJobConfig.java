@@ -18,10 +18,12 @@ import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.infrastructure.item.support.SynchronizedItemStreamReader;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.core.retry.RetryPolicy;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.io.BufferedWriter;
@@ -36,8 +38,15 @@ import java.util.Map;
 @Configuration
 public class CuentasAnualesJobConfig {
 
+    @Value("${batch.chunk-size}")
+    private int chunkSize;
+
+    @Value("${batch.max-skips}")
+    private int maxSkips;
+
     @Bean
     public FlatFileItemReader<CuentaAnualCsv> movimientoAnualFileReader() {
+
         return new FlatFileItemReaderBuilder<CuentaAnualCsv>()
                 .name("movimientoAnualFileReader")
                 .resource(new ClassPathResource("data/cuentas_anuales.csv"))
@@ -51,12 +60,15 @@ public class CuentasAnualesJobConfig {
     @Bean
     public SynchronizedItemStreamReader<CuentaAnualCsv> movimientoAnualReader(
             FlatFileItemReader<CuentaAnualCsv> movimientoAnualFileReader) {
-        return new SynchronizedItemStreamReader<>(movimientoAnualFileReader);
+
+        return new SynchronizedItemStreamReader<>(
+                movimientoAnualFileReader);
     }
 
     @Bean
     public RepositoryItemWriter<MovimientoAnual> movimientoAnualWriter(
             MovimientoAnualRepository repository) {
+
         return new RepositoryItemWriterBuilder<MovimientoAnual>()
                 .repository(repository)
                 .methodName("save")
@@ -67,10 +79,17 @@ public class CuentasAnualesJobConfig {
     public Step limpiarMovimientosAnualesStep(
             JobRepository jobRepository,
             MovimientoAnualRepository repository) {
-        return new StepBuilder("limpiarMovimientosAnualesStep", jobRepository)
+
+        return new StepBuilder(
+                "limpiarMovimientosAnualesStep",
+                jobRepository)
                 .tasklet((contribution, chunkContext) -> {
+
                     repository.deleteAllInBatch();
-                    System.out.println("[CLEANUP] Movimientos anuales anteriores eliminados.");
+
+                    System.out.println(
+                            "[CLEANUP] Movimientos anuales anteriores eliminados.");
+
                     return RepeatStatus.FINISHED;
                 })
                 .build();
@@ -83,19 +102,21 @@ public class CuentasAnualesJobConfig {
             SynchronizedItemStreamReader<CuentaAnualCsv> movimientoAnualReader,
             MovimientoAnualProcessor processor,
             RepositoryItemWriter<MovimientoAnual> movimientoAnualWriter,
-            SimpleAsyncTaskExecutor batchTaskExecutor,
-            BatchSkipListener skipListener) {
+            ThreadPoolTaskExecutor batchTaskExecutor,
+            BatchSkipListener skipListener,
+            RetryPolicy batchRetryPolicy) {
 
-        return new StepBuilder("movimientosAnualesStep", jobRepository)
-                .<CuentaAnualCsv, MovimientoAnual>chunk(
-                        BatchInfrastructureConfig.CHUNK_SIZE)
+        return new StepBuilder(
+                "movimientosAnualesStep",
+                jobRepository)
+                .<CuentaAnualCsv, MovimientoAnual>chunk(chunkSize)
                 .transactionManager(transactionManager)
                 .reader(movimientoAnualReader)
                 .processor(processor)
                 .writer(movimientoAnualWriter)
                 .faultTolerant()
-                .skipPolicy(new CustomSkipPolicy(
-                        BatchInfrastructureConfig.MAX_SKIPS))
+                .retryPolicy(batchRetryPolicy)
+                .skipPolicy(new CustomSkipPolicy(maxSkips))
                 .skipListener(skipListener)
                 .taskExecutor(batchTaskExecutor)
                 .build();
@@ -106,7 +127,9 @@ public class CuentasAnualesJobConfig {
             JobRepository jobRepository,
             MovimientoAnualRepository repository) {
 
-        return new StepBuilder("reporteAnualStep", jobRepository)
+        return new StepBuilder(
+                "reporteAnualStep",
+                jobRepository)
                 .tasklet((contribution, chunkContext) -> {
 
                     List<MovimientoAnual> movimientos =
@@ -116,25 +139,29 @@ public class CuentasAnualesJobConfig {
                             "output",
                             "reporte_anual_auditoria.csv");
 
-                    Files.createDirectories(rutaReporte.getParent());
+                    Files.createDirectories(
+                            rutaReporte.getParent());
 
-                    Map<Long, BigDecimal> saldosAcumulados = new HashMap<>();
+                    Map<Long, BigDecimal> saldosAcumulados =
+                            new HashMap<>();
 
-                    try (BufferedWriter writer = Files.newBufferedWriter(
-                            rutaReporte,
-                            StandardCharsets.UTF_8)) {
+                    try (BufferedWriter writer =
+                                 Files.newBufferedWriter(
+                                         rutaReporte,
+                                         StandardCharsets.UTF_8)) {
 
                         writer.write(
                                 "cuenta_id,fecha,transaccion,monto,"
                                         + "descripcion,saldo_movimientos_acumulado");
+
                         writer.newLine();
 
                         for (MovimientoAnual movimiento : movimientos) {
 
                             BigDecimal saldoAcumulado =
                                     saldosAcumulados.getOrDefault(
-                                            movimiento.getCuentaId(),
-                                            BigDecimal.ZERO)
+                                                    movimiento.getCuentaId(),
+                                                    BigDecimal.ZERO)
                                             .add(movimiento.getMonto());
 
                             saldosAcumulados.put(
@@ -148,19 +175,30 @@ public class CuentasAnualesJobConfig {
                                             + movimiento.getMonto() + ","
                                             + movimiento.getDescripcion() + ","
                                             + saldoAcumulado);
+
                             writer.newLine();
                         }
                     }
 
-                    System.out.println("====================================");
-                    System.out.println(" ESTADOS DE CUENTA ANUALES");
-                    System.out.println("====================================");
                     System.out.println(
-                            "Movimientos incluidos: " + movimientos.size());
+                            "====================================");
+
+                    System.out.println(
+                            " ESTADOS DE CUENTA ANUALES");
+
+                    System.out.println(
+                            "====================================");
+
+                    System.out.println(
+                            "Movimientos incluidos: "
+                                    + movimientos.size());
+
                     System.out.println(
                             "Archivo generado: "
                                     + rutaReporte.toAbsolutePath());
-                    System.out.println("====================================");
+
+                    System.out.println(
+                            "====================================");
 
                     return RepeatStatus.FINISHED;
                 })
@@ -174,7 +212,9 @@ public class CuentasAnualesJobConfig {
             Step movimientosAnualesStep,
             Step reporteAnualStep) {
 
-        return new JobBuilder("cuentasAnualesJob", jobRepository)
+        return new JobBuilder(
+                "cuentasAnualesJob",
+                jobRepository)
                 .start(limpiarMovimientosAnualesStep)
                 .next(movimientosAnualesStep)
                 .next(reporteAnualStep)

@@ -12,16 +12,18 @@ import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
+import org.springframework.batch.infrastructure.item.data.RepositoryItemWriter;
+import org.springframework.batch.infrastructure.item.data.builder.RepositoryItemWriterBuilder;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.infrastructure.item.support.SynchronizedItemStreamReader;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.task.SimpleAsyncTaskExecutor;
-import org.springframework.batch.infrastructure.item.data.RepositoryItemWriter;
-import org.springframework.batch.infrastructure.item.data.builder.RepositoryItemWriterBuilder;
+import org.springframework.core.retry.RetryPolicy;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
@@ -33,8 +35,15 @@ import java.util.stream.Collectors;
 @Configuration
 public class TransaccionesJobConfig {
 
+    @Value("${batch.chunk-size}")
+    private int chunkSize;
+
+    @Value("${batch.max-skips}")
+    private int maxSkips;
+
     @Bean
     public FlatFileItemReader<TransaccionCsv> transaccionFileReader() {
+
         return new FlatFileItemReaderBuilder<TransaccionCsv>()
                 .name("transaccionFileReader")
                 .resource(new ClassPathResource("data/transacciones.csv"))
@@ -48,12 +57,15 @@ public class TransaccionesJobConfig {
     @Bean
     public SynchronizedItemStreamReader<TransaccionCsv> transaccionReader(
             FlatFileItemReader<TransaccionCsv> transaccionFileReader) {
-        return new SynchronizedItemStreamReader<>(transaccionFileReader);
+
+        return new SynchronizedItemStreamReader<>(
+                transaccionFileReader);
     }
 
     @Bean
     public RepositoryItemWriter<Transaccion> transaccionWriter(
             TransaccionRepository repository) {
+
         return new RepositoryItemWriterBuilder<Transaccion>()
                 .repository(repository)
                 .methodName("save")
@@ -64,10 +76,17 @@ public class TransaccionesJobConfig {
     public Step limpiarTransaccionesStep(
             JobRepository jobRepository,
             TransaccionRepository repository) {
-        return new StepBuilder("limpiarTransaccionesStep", jobRepository)
+
+        return new StepBuilder(
+                "limpiarTransaccionesStep",
+                jobRepository)
                 .tasklet((contribution, chunkContext) -> {
+
                     repository.deleteAllInBatch();
-                    System.out.println("[CLEANUP] Registros anteriores eliminados.");
+
+                    System.out.println(
+                            "[CLEANUP] Registros anteriores eliminados.");
+
                     return RepeatStatus.FINISHED;
                 })
                 .build();
@@ -80,19 +99,21 @@ public class TransaccionesJobConfig {
             SynchronizedItemStreamReader<TransaccionCsv> transaccionReader,
             TransaccionProcessor processor,
             RepositoryItemWriter<Transaccion> transaccionWriter,
-            SimpleAsyncTaskExecutor batchTaskExecutor,
-            BatchSkipListener skipListener) {
+            ThreadPoolTaskExecutor batchTaskExecutor,
+            BatchSkipListener skipListener,
+            RetryPolicy batchRetryPolicy) {
 
-        return new StepBuilder("transaccionesStep", jobRepository)
-                .<TransaccionCsv, Transaccion>chunk(
-                        BatchInfrastructureConfig.CHUNK_SIZE)
+        return new StepBuilder(
+                "transaccionesStep",
+                jobRepository)
+                .<TransaccionCsv, Transaccion>chunk(chunkSize)
                 .transactionManager(transactionManager)
                 .reader(transaccionReader)
                 .processor(processor)
                 .writer(transaccionWriter)
                 .faultTolerant()
-                .skipPolicy(new CustomSkipPolicy(
-                        BatchInfrastructureConfig.MAX_SKIPS))
+                .retryPolicy(batchRetryPolicy)
+                .skipPolicy(new CustomSkipPolicy(maxSkips))
                 .skipListener(skipListener)
                 .taskExecutor(batchTaskExecutor)
                 .build();
@@ -103,41 +124,78 @@ public class TransaccionesJobConfig {
             JobRepository jobRepository,
             TransaccionRepository repository) {
 
-        return new StepBuilder("resumenTransaccionesStep", jobRepository)
+        return new StepBuilder(
+                "resumenTransaccionesStep",
+                jobRepository)
                 .tasklet((contribution, chunkContext) -> {
 
-                    List<Transaccion> transacciones = repository.findAll();
+                    List<Transaccion> transacciones =
+                            repository.findAll();
 
-                    long total = transacciones.size();
-                    long debitos = transacciones.stream()
-                            .filter(t -> "debito".equals(t.getTipo()))
-                            .count();
-                    long creditos = transacciones.stream()
-                            .filter(t -> "credito".equals(t.getTipo()))
-                            .count();
+                    long total =
+                            transacciones.size();
 
-                    BigDecimal montoTotal = transacciones.stream()
-                            .map(Transaccion::getMonto)
-                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    long debitos =
+                            transacciones.stream()
+                                    .filter(t ->
+                                            "debito".equals(t.getTipo()))
+                                    .count();
+
+                    long creditos =
+                            transacciones.stream()
+                                    .filter(t ->
+                                            "credito".equals(t.getTipo()))
+                                    .count();
+
+                    BigDecimal montoTotal =
+                            transacciones.stream()
+                                    .map(Transaccion::getMonto)
+                                    .reduce(
+                                            BigDecimal.ZERO,
+                                            BigDecimal::add);
 
                     Map<java.time.LocalDate, List<Transaccion>> porFecha =
                             transacciones.stream()
-                                    .collect(Collectors.groupingBy(
-                                            Transaccion::getFecha,
-                                            TreeMap::new,
-                                            Collectors.toList()));
+                                    .collect(
+                                            Collectors.groupingBy(
+                                                    Transaccion::getFecha,
+                                                    TreeMap::new,
+                                                    Collectors.toList()));
 
-                    System.out.println("====================================");
-                    System.out.println(" REPORTE DE TRANSACCIONES DIARIAS");
-                    System.out.println("====================================");
-                    System.out.println("Registros válidos almacenados: " + total);
-                    System.out.println("Débitos: " + debitos);
-                    System.out.println("Créditos: " + creditos);
-                    System.out.println("Monto total: $" + montoTotal);
-                    System.out.println("------------------------------------");
-                    porFecha.forEach((fecha, lista) ->
-                            System.out.println(fecha + " | movimientos=" + lista.size()));
-                    System.out.println("====================================");
+                    System.out.println(
+                            "====================================");
+
+                    System.out.println(
+                            " REPORTE DE TRANSACCIONES DIARIAS");
+
+                    System.out.println(
+                            "====================================");
+
+                    System.out.println(
+                            "Registros válidos almacenados: "
+                                    + total);
+
+                    System.out.println(
+                            "Débitos: " + debitos);
+
+                    System.out.println(
+                            "Créditos: " + creditos);
+
+                    System.out.println(
+                            "Monto total: $" + montoTotal);
+
+                    System.out.println(
+                            "------------------------------------");
+
+                    porFecha.forEach(
+                            (fecha, lista) ->
+                                    System.out.println(
+                                            fecha
+                                                    + " | movimientos="
+                                                    + lista.size()));
+
+                    System.out.println(
+                            "====================================");
 
                     return RepeatStatus.FINISHED;
                 })
@@ -151,7 +209,9 @@ public class TransaccionesJobConfig {
             Step transaccionesStep,
             Step resumenTransaccionesStep) {
 
-        return new JobBuilder("transaccionesJob", jobRepository)
+        return new JobBuilder(
+                "transaccionesJob",
+                jobRepository)
                 .start(limpiarTransaccionesStep)
                 .next(transaccionesStep)
                 .next(resumenTransaccionesStep)

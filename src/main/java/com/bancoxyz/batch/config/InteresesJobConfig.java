@@ -18,10 +18,12 @@ import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.infrastructure.item.support.SynchronizedItemStreamReader;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.core.retry.RetryPolicy;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
@@ -30,8 +32,15 @@ import java.util.List;
 @Configuration
 public class InteresesJobConfig {
 
+    @Value("${batch.chunk-size}")
+    private int chunkSize;
+
+    @Value("${batch.max-skips}")
+    private int maxSkips;
+
     @Bean
     public FlatFileItemReader<InteresCsv> interesFileReader() {
+
         return new FlatFileItemReaderBuilder<InteresCsv>()
                 .name("interesFileReader")
                 .resource(new ClassPathResource("data/intereses.csv"))
@@ -45,12 +54,14 @@ public class InteresesJobConfig {
     @Bean
     public SynchronizedItemStreamReader<InteresCsv> interesReader(
             FlatFileItemReader<InteresCsv> interesFileReader) {
+
         return new SynchronizedItemStreamReader<>(interesFileReader);
     }
 
     @Bean
     public RepositoryItemWriter<InteresCalculado> interesWriter(
             InteresCalculadoRepository repository) {
+
         return new RepositoryItemWriterBuilder<InteresCalculado>()
                 .repository(repository)
                 .methodName("save")
@@ -61,10 +72,17 @@ public class InteresesJobConfig {
     public Step limpiarInteresesStep(
             JobRepository jobRepository,
             InteresCalculadoRepository repository) {
-        return new StepBuilder("limpiarInteresesStep", jobRepository)
+
+        return new StepBuilder(
+                "limpiarInteresesStep",
+                jobRepository)
                 .tasklet((contribution, chunkContext) -> {
+
                     repository.deleteAllInBatch();
-                    System.out.println("[CLEANUP] Intereses anteriores eliminados.");
+
+                    System.out.println(
+                            "[CLEANUP] Intereses anteriores eliminados.");
+
                     return RepeatStatus.FINISHED;
                 })
                 .build();
@@ -77,19 +95,21 @@ public class InteresesJobConfig {
             SynchronizedItemStreamReader<InteresCsv> interesReader,
             InteresProcessor processor,
             RepositoryItemWriter<InteresCalculado> interesWriter,
-            SimpleAsyncTaskExecutor batchTaskExecutor,
-            BatchSkipListener skipListener) {
+            ThreadPoolTaskExecutor batchTaskExecutor,
+            BatchSkipListener skipListener,
+            RetryPolicy batchRetryPolicy) {
 
-        return new StepBuilder("interesesStep", jobRepository)
-                .<InteresCsv, InteresCalculado>chunk(
-                        BatchInfrastructureConfig.CHUNK_SIZE)
+        return new StepBuilder(
+                "interesesStep",
+                jobRepository)
+                .<InteresCsv, InteresCalculado>chunk(chunkSize)
                 .transactionManager(transactionManager)
                 .reader(interesReader)
                 .processor(processor)
                 .writer(interesWriter)
                 .faultTolerant()
-                .skipPolicy(new CustomSkipPolicy(
-                        BatchInfrastructureConfig.MAX_SKIPS))
+                .retryPolicy(batchRetryPolicy)
+                .skipPolicy(new CustomSkipPolicy(maxSkips))
                 .skipListener(skipListener)
                 .taskExecutor(batchTaskExecutor)
                 .build();
@@ -100,36 +120,72 @@ public class InteresesJobConfig {
             JobRepository jobRepository,
             InteresCalculadoRepository repository) {
 
-        return new StepBuilder("resumenInteresesStep", jobRepository)
+        return new StepBuilder(
+                "resumenInteresesStep",
+                jobRepository)
                 .tasklet((contribution, chunkContext) -> {
 
-                    List<InteresCalculado> resultados = repository.findAll();
+                    List<InteresCalculado> resultados =
+                            repository.findAll();
 
-                    long ahorro = resultados.stream()
-                            .filter(i -> "ahorro".equals(i.getTipo()))
-                            .count();
+                    long ahorro =
+                            resultados.stream()
+                                    .filter(i ->
+                                            "ahorro".equals(i.getTipo()))
+                                    .count();
 
-                    long prestamo = resultados.stream()
-                            .filter(i -> "prestamo".equals(i.getTipo()))
-                            .count();
+                    long prestamo =
+                            resultados.stream()
+                                    .filter(i ->
+                                            "prestamo".equals(i.getTipo()))
+                                    .count();
 
-                    BigDecimal interesTotal = resultados.stream()
-                            .map(InteresCalculado::getInteresCalculado)
-                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal interesTotal =
+                            resultados.stream()
+                                    .map(InteresCalculado::getInteresCalculado)
+                                    .reduce(
+                                            BigDecimal.ZERO,
+                                            BigDecimal::add);
 
-                    System.out.println("====================================");
-                    System.out.println(" CÁLCULO DE INTERESES MENSUALES");
-                    System.out.println("====================================");
-                    System.out.println("Cuentas procesadas: " + resultados.size());
-                    System.out.println("Cuentas de ahorro: " + ahorro);
-                    System.out.println("Cuentas de préstamo: " + prestamo);
-                    System.out.println("Interés total calculado: $" + interesTotal);
-                    System.out.println("------------------------------------");
-                    resultados.forEach(i -> System.out.println(
-                            "Cuenta " + i.getCuentaId()
-                                    + " | tipo=" + i.getTipo()
-                                    + " | saldo final=$" + i.getSaldoFinal()));
-                    System.out.println("====================================");
+                    System.out.println(
+                            "====================================");
+
+                    System.out.println(
+                            " CÁLCULO DE INTERESES MENSUALES");
+
+                    System.out.println(
+                            "====================================");
+
+                    System.out.println(
+                            "Cuentas procesadas: "
+                                    + resultados.size());
+
+                    System.out.println(
+                            "Cuentas de ahorro: "
+                                    + ahorro);
+
+                    System.out.println(
+                            "Cuentas de préstamo: "
+                                    + prestamo);
+
+                    System.out.println(
+                            "Interés total calculado: $"
+                                    + interesTotal);
+
+                    System.out.println(
+                            "------------------------------------");
+
+                    resultados.forEach(
+                            i -> System.out.println(
+                                    "Cuenta "
+                                            + i.getCuentaId()
+                                            + " | tipo="
+                                            + i.getTipo()
+                                            + " | saldo final=$"
+                                            + i.getSaldoFinal()));
+
+                    System.out.println(
+                            "====================================");
 
                     return RepeatStatus.FINISHED;
                 })
@@ -143,7 +199,9 @@ public class InteresesJobConfig {
             Step interesesStep,
             Step resumenInteresesStep) {
 
-        return new JobBuilder("interesesJob", jobRepository)
+        return new JobBuilder(
+                "interesesJob",
+                jobRepository)
                 .start(limpiarInteresesStep)
                 .next(interesesStep)
                 .next(resumenInteresesStep)
