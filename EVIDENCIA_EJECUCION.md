@@ -1,121 +1,83 @@
-# Evidencia de ejecución - Exp1_S2_Grupo14
+# Evidencia de ejecución - Exp1_S3_Pablo_Pilar_Rojas
 
-Las capturas en `evidencias/` corresponden a la versión final del proyecto, con la política personalizada de skip y el escalamiento a 3 hilos con chunks de 5 ya en funcionamiento. Todos los Jobs fueron ejecutados con `ejecucion=2` sobre MySQL activo.
+Este documento resume las evidencias correspondientes a la Semana 3 del proyecto Banco XYZ.
 
-## 1. Reporte de transacciones diarias
+## 1. Configuración de Semana 3
 
-Comando:
+Se implementó procesamiento paralelo con `ThreadPoolTaskExecutor`, parámetros externalizados para chunks, hilos y cola de ejecución, tolerancia a fallos mediante Retry y Skip, y configuración del pool de conexiones HikariCP.
 
-```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--spring.batch.job.name=transaccionesJob ejecucion=2"
-```
+**Evidencia:** `evidencias/Evidencias S3/01_configuracion_semana3.png`
 
-Resultado obtenido en consola:
+## 2. Benchmark de escalamiento
 
-```text
-[CLEANUP] Registros anteriores eliminados.
-[CORRECCION] Débito negativo normalizado. ID=3
-[SKIP][PROCESS] Monto cero para transacción ID 4 | item=TransaccionCsv{...}
-[SKIP][PROCESS] Transacción duplicada detectada para ID 8 | item=TransaccionCsv{...}
-====================================
- REPORTE DE TRANSACCIONES DIARIAS
-====================================
-Registros válidos almacenados: 8
-Débitos: 4
-Créditos: 4
-Monto total: $9400.00
-====================================
-```
+Se probaron distintas combinaciones de cantidad de hilos y tamaño de chunk. La mejor configuración observada fue:
 
-El Job finaliza con estado `COMPLETED` a pesar de los dos registros inválidos/duplicados, confirmando la tolerancia a fallos.
+- 2 hilos
+- chunk de 5 registros
 
-**Evidencia:** `evidencias/01_job_transacciones_consola.png`
+**Evidencia:** `evidencias/Evidencias S3/02_benchmark_escalamiento.png`
 
-## 2. Cálculo de intereses mensuales
+## 3. Reporte de transacciones diarias
 
-Comando:
+El Job `transaccionesJob` procesa correctamente los registros, normaliza valores y omite mediante Skip los registros inválidos.
 
-```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--spring.batch.job.name=interesesJob ejecucion=2"
-```
+Resultado:
 
-Resultado obtenido en consola:
+- 8 registros válidos
+- 4 débitos
+- 4 créditos
+- monto total: $9400.00
 
-```text
-====================================
- CÁLCULO DE INTERESES MENSUALES
-====================================
-Cuentas procesadas: 7
-Cuentas de ahorro: 4
-Cuentas de préstamo: 3
-Interés total calculado: $625.00
-====================================
-```
+**Evidencia:** `evidencias/Evidencias S3/03_transacciones_final.png`
 
-La cuenta hipotecaria (ID 105) queda excluida del cálculo, tal como exige el requerimiento.
+## 4. Cálculo de intereses mensuales
 
-**Evidencia:** `evidencias/02_job_intereses_consola.png`
+El Job `interesesJob` procesa las cuentas y calcula los intereses correspondientes.
 
-## 3. Estados de cuenta anuales
+Resultado:
 
-Comando:
+- 7 cuentas procesadas
+- 4 cuentas de ahorro
+- 3 cuentas de préstamo
+- interés total calculado: $625.00
 
-```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--spring.batch.job.name=cuentasAnualesJob ejecucion=2"
-```
+**Evidencia:** `evidencias/Evidencias S3/04_intereses_final.png`
 
-Resultado obtenido en consola:
+## 5. Estados de cuenta anuales
 
-```text
-====================================
- ESTADOS DE CUENTA ANUALES
-====================================
-Movimientos incluidos: 8
-Archivo generado: ...\output\reporte_anual_auditoria.csv
-====================================
-```
+El Job `cuentasAnualesJob` procesa los movimientos anuales y genera el archivo de auditoría.
 
-**Evidencia:** `evidencias/03_job_cuentas_anuales_consola.png`
+Resultado:
 
-## 4. Persistencia en MySQL
+- 8 movimientos incluidos
+- archivo `output/reporte_anual_auditoria.csv` generado correctamente
 
-Se verificó que los tres Jobs efectivamente persisten los datos en la base relacional `bank_batch_db`:
+**Evidencia:** `evidencias/Evidencias S3/05_cuentas_anuales_final.png`
 
-```sql
-SELECT * FROM transacciones_procesadas;   -- 8 filas
-SELECT * FROM intereses_calculados;       -- 7 filas
-SELECT * FROM movimientos_anuales;        -- 8 filas
-```
+## 6. Auditoría de registros rechazados
 
-**Evidencia:**
-- `evidencias/04_mysql_transacciones_procesadas.png`
-- `evidencias/05_mysql_intereses_calculados.png`
-- `evidencias/06_mysql_movimientos_anuales.png`
+Los registros descartados durante el procesamiento son almacenados en:
 
-## 5. Archivo de reporte anual generado
+`output/registros_rechazados.csv`
 
-Se verificó el contenido de `output/reporte_anual_auditoria.csv`, confirmando el saldo acumulado por cuenta calculado en `reporteAnualStep`.
+Se registran casos como:
 
-**Evidencia:** `evidencias/07_reporte_anual_csv.png`
+- monto cero
+- transacción duplicada
+- depósito inválido
 
-## 6. Evidencia de escalamiento (3 hilos, chunk 5)
+**Evidencia:** `evidencias/Evidencias S3/06_registros_rechazados.png`
 
-La configuración se centraliza en `BatchInfrastructureConfig.java`:
+## 7. Pruebas automatizadas
 
-```java
-public static final int NUMERO_HILOS = 3;
-public static final int CHUNK_SIZE = 5;
-```
+Se ejecutaron las pruebas del proyecto, incluyendo pruebas específicas para la política de Retry.
 
-Y se aplica a los tres Steps principales mediante:
+Resultado:
 
-```java
-.chunk(BatchInfrastructureConfig.CHUNK_SIZE)
-.taskExecutor(batchTaskExecutor)
-```
+- Tests ejecutados: 3
+- Failures: 0
+- Errors: 0
+- Skipped: 0
+- BUILD SUCCESS
 
-**Evidencia:** `evidencias/08_config_escalamiento.png`
-
-## 7. Evidencia de tolerancia a fallos
-
-Los mensajes `[SKIP][PROCESS]` visibles en la consola del punto 1 confirman que `CustomSkipPolicy` (`src/main/java/com/bancoxyz/batch/batch/CustomSkipPolicy.java`) permite omitir registros inválidos sin detener el Job, mientras `BatchSkipListener` registra cada omisión para auditoría.
+**Evidencia:** `evidencias/Evidencias S3/07_pruebas_retry.png`
