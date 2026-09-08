@@ -1,167 +1,194 @@
-# Banco XYZ - Procesos Batch
+# Banco XYZ - Backend for Frontend (BFF)
 
-Proyecto desarrollado con **Spring Boot 4.0.7, Java 21, Spring Batch y MySQL** para modernizar tres procesos batch del Banco XYZ a partir de archivos CSV.
+## Exp2 - Semana 4 - Grupo14
+
+Este proyecto corresponde a la actividad de la Semana 4 de Desarrollo Backend III.
+La idea principal fue continuar con el proyecto del Banco XYZ, pero esta vez aplicando el patrón Backend for Frontend (BFF), creando una respuesta diferente dependiendo del tipo de cliente que se conecta al sistema.
 
 ## Objetivo
 
-Implementar una solución batch que permita leer, validar, transformar y persistir información bancaria, incorporando procesamiento paralelo, tolerancia a fallos y auditoría de registros rechazados.
+Implementar una solución BFF para tres tipos de clientes:
+- Web
+- Mobile
+- Cajero Automático (ATM)
+Cada uno tiene necesidades distintas, por lo tanto no todos reciben la misma cantidad de información.
 
-Los Jobs implementados son:
+## Estrategia utilizada
 
-- `transaccionesJob`: procesamiento de transacciones diarias.
-- `interesesJob`: cálculo de intereses mensuales.
-- `cuentasAnualesJob`: generación de estados de cuenta anuales.
+Se decidió separar el funcionamiento por tipo de cliente.
+Las rutas principales son:
+- `/api/web/**`
+- `/api/mobile/**`
+- `/api/atm/**`
+La idea es que cada canal tenga una respuesta adaptada a lo que realmente necesita.
 
-## Características principales
+## Estructura creada
 
-- Lectura de archivos CSV con `FlatFileItemReader`.
-- Procesamiento orientado a chunks.
-- Procesamiento paralelo con `ThreadPoolTaskExecutor`.
-- Lectura segura mediante `SynchronizedItemStreamReader`.
-- Persistencia en MySQL mediante Spring Data JPA.
-- `CustomSkipPolicy` para registros inválidos.
-- `RetryPolicy` para errores transitorios.
-- Registro de errores mediante SLF4J.
-- Auditoría de rechazados en `output/registros_rechazados.csv`.
-- Pool de conexiones configurado con HikariCP.
-
-## Configuración de procesamiento
-
-Los principales parámetros se encuentran externalizados en `application.properties`:
-
-```properties
-batch.chunk-size=5
-batch.core-pool-size=2
-batch.max-pool-size=2
-batch.queue-capacity=10
-batch.max-skips=10
-
-batch.retry-limit=3
-batch.retry-initial-interval=500
-batch.retry-multiplier=2.0
-batch.retry-max-interval=2000
+```
+bff/
+├── config/
+│   └── SecurityConfig.java
+├── web/
+│   └── WebBffController.java
+├── mobile/
+│   └── MobileBffController.java
+└── atm/
+    └── AtmBffController.java
 ```
 
-También se configura HikariCP:
+## BFF Web
 
-```properties
-spring.datasource.hikari.maximum-pool-size=8
-spring.datasource.hikari.minimum-idle=3
-spring.datasource.hikari.connection-timeout=30000
+Para el canal Web se entrega información más completa, ya que un navegador puede manejar una interfaz con mayor cantidad de datos.
+
+Endpoint:
+```
+GET /api/web/dashboard
 ```
 
-## Comparación de rendimiento
+La respuesta incluye:
+- transacciones
+- intereses
+- movimientos anuales
 
-Se probaron distintas combinaciones de hilos y tamaño de chunk utilizando `transaccionesJob`.
+Usuario de prueba:
+```
+web / web123
+```
 
-| Configuración | Step principal | Job completo |
-|---|---:|---:|
-| 1 hilo / chunk 5 | 174 ms | 649 ms |
-| **2 hilos / chunk 5** | **144 ms** | **622 ms** |
-| 3 hilos / chunk 5 | 148 ms | 631 ms |
-| 2 hilos / chunk 2 | 170 ms | 645 ms |
-| 2 hilos / chunk 1 | 209 ms | 693 ms |
+Prueba:
+```
+curl.exe -u web:web123 http://localhost:8080/api/web/dashboard
+```
 
-La mejor configuración observada fue **2 hilos con chunks de 5 registros**.
+## BFF Mobile
 
-Debido al tamaño reducido de los archivos utilizados en la actividad, los tiempos son referenciales. Sin embargo, las pruebas permiten comprobar que aumentar la cantidad de hilos o disminuir demasiado el tamaño del chunk no necesariamente mejora el rendimiento.
+Para Mobile se decidió entregar menos información, pensando en una respuesta más rápida y liviana.
 
-## Tolerancia a fallos
+Endpoint:
+```
+GET /api/mobile/resumen
+```
 
-La aplicación diferencia entre errores de datos y errores transitorios.
+La respuesta incluye:
+- total de transacciones
+- total de cuentas
+- cantidad de movimientos
+- últimas 3 transacciones
 
-La `CustomSkipPolicy` permite omitir registros que generan `IllegalArgumentException`, con un máximo configurable de 10 rechazos por Step.
+Usuario de prueba:
+```
+mobile / mobile123
+```
 
-Los errores transitorios derivados de `TransientDataAccessException` utilizan una `RetryPolicy` con hasta 3 reintentos y espera incremental.
+Prueba:
+```
+curl.exe -u mobile:mobile123 http://localhost:8080/api/mobile/resumen
+```
 
-Si el error persiste después de los reintentos, el Step falla en lugar de ignorar el problema.
+## BFF ATM
 
-Los registros rechazados son almacenados en:
+Para el cajero automático se crearon operaciones más específicas.
 
-`output/registros_rechazados.csv`
+Endpoints:
+```
+GET /api/atm/saldo
+POST /api/atm/retiro
+```
 
-El archivo registra fecha, fase del procesamiento, elemento rechazado y motivo del error.
+La consulta de saldo entrega información enfocada solamente en una operación de cajero.
+
+Usuario de prueba:
+```
+atm / atm123
+```
+
+Prueba:
+```
+curl.exe -u atm:atm123 http://localhost:8080/api/atm/saldo
+```
+
+## Seguridad
+
+Se agregó Spring Security para separar el acceso según el tipo de canal.
+
+Se utilizan los siguientes roles:
+- ROLE_WEB
+- ROLE_MOBILE
+- ROLE_ATM
+
+Cada usuario puede acceder solamente a las rutas que le corresponden.
+
+Por ejemplo, si el usuario Web intenta entrar a una ruta ATM:
+```
+curl.exe -i -u web:web123 http://localhost:8080/api/atm/saldo
+```
+
+la aplicación responde con:
+```
+HTTP/1.1 403 Forbidden
+```
+
+Esto permite comprobar que la autorización funciona correctamente.
 
 ## Base de datos
 
-Crear la base de datos MySQL:
-
-```sql
-CREATE DATABASE bank_batch_db
-CHARACTER SET utf8mb4
-COLLATE utf8mb4_unicode_ci;
+Se mantiene la base de datos utilizada en las semanas anteriores:
+```
+bank_batch_db
 ```
 
-La contraseña no se almacena directamente en el proyecto.
+El proyecto utiliza MySQL junto con Spring Data JPA.
 
-Antes de ejecutar, configurar en PowerShell:
-
-```powershell
-$env:DB_PASSWORD="CONTRASEÑA_MYSQL"
+La contraseña de MySQL se configura mediante una variable de entorno:
+```
+$env:DB_PASSWORD="TU_CONTRASEÑA"
 ```
 
 ## Ejecución
 
-Transacciones diarias:
-
-```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--spring.batch.job.name=transaccionesJob ejecucion=1"
+Para levantar el proyecto se utiliza:
+```
+.\mvnw.cmd spring-boot:run
 ```
 
-Intereses mensuales:
-
-```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--spring.batch.job.name=interesesJob ejecucion=1"
+La aplicación queda disponible en:
+```
+http://localhost:8080
 ```
 
-Estados de cuenta anuales:
+## Diferencia entre los BFF
 
-```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--spring.batch.job.name=cuentasAnualesJob ejecucion=1"
+La principal diferencia entre los tres canales es la cantidad y tipo de información que reciben.
+
+### Web
+
+Entrega información completa.
+
+### Mobile
+
+Entrega un resumen con menos datos.
+
+### ATM
+
+Entrega información específica para operaciones de cajero.
+
+De esta forma se aplica el patrón BFF, ya que cada frontend recibe una respuesta pensada para sus propias necesidades.
+
+## Evidencias
+
+Las evidencias de esta semana están guardadas en:
+```
+evidencias/Evidencias S4/
 ```
 
-Para volver a ejecutar un Job se debe utilizar un valor diferente en el parámetro `ejecucion`.
+Se incluyen capturas de:
+1. BFF Web
+2. BFF Mobile
+3. BFF ATM
+4. Validación de seguridad entre canales
 
-## Resultados validados
+## Conclusión
 
-### Transacciones
-
-- Registros válidos: **8**
-- Débitos: **4**
-- Créditos: **4**
-- Monto total procesado: **$9.400**
-- Registros rechazados: **2**
-
-### Intereses
-
-- Cuentas procesadas: **7**
-- Cuentas de ahorro: **4**
-- Cuentas de préstamo: **3**
-- Interés total calculado: **$625**
-
-### Cuentas anuales
-
-- Movimientos incluidos: **8**
-- Registro inválido rechazado: **1**
-- Archivo generado: `output/reporte_anual_auditoria.csv`
-
-## Pruebas
-
-Para ejecutar las pruebas:
-
-```powershell
-.\mvnw.cmd test
-```
-
-Resultado validado:
-
-```text
-Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
-BUILD SUCCESS
-```
-
-Las pruebas incluyen la carga del contexto de Spring Boot y la validación de la política de Retry para errores transitorios y no transitorios.
-
-## Documentación
-
-La justificación de la arquitectura, estrategia de paralelismo, tolerancia a fallos y selección de parámetros se encuentra en `PROPUESTA_TECNICA.md`.
+Con esta actividad se logró aplicar el patrón Backend for Frontend sobre el proyecto Banco XYZ.
+Se crearon tres accesos distintos para Web, Mobile y ATM, manteniendo una misma fuente de datos pero entregando respuestas diferentes según el tipo de cliente.
+Además, se agregó seguridad por roles para evitar que un usuario pueda acceder a un canal que no le corresponde.
