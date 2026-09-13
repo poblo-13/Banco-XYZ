@@ -4,82 +4,165 @@
 
 ## 1. Introducción
 
-Para la modernización del sistema Banco XYZ se propone implementar el patrón arquitectónico Backend for Frontend (BFF), separando la comunicación con los distintos tipos de clientes en backends especializados.
+Para la modernización del sistema Banco XYZ se implementa una arquitectura basada en el patrón **Backend for Frontend (BFF)**, separando la atención de los distintos tipos de clientes en backends especializados.
 
 La solución contempla tres canales:
+
 - Web
 - Mobile
 - Cajero Automático (ATM)
 
-Cada canal posee necesidades diferentes en cuanto a cantidad de información, operaciones disponibles y seguridad. Por esta razón se implementa un BFF independiente para cada uno.
+Cada canal posee necesidades diferentes en cuanto a cantidad de información, operaciones disponibles y seguridad. Por esta razón, se implementa un BFF independiente para cada uno.
 
 ---
 
 ## 2. Estrategia de implementación
 
-La estrategia seleccionada consiste en utilizar un Core API central encargado del acceso a los datos bancarios y tres BFF independientes que consumen dicho servicio.
+La estrategia seleccionada utiliza un **Core API central** encargado de la lógica de acceso a los datos bancarios y tres BFF independientes que consumen dicho servicio.
 
-La arquitectura queda organizada de la siguiente manera:
+La arquitectura general es:
 
 ```text
-Clientes
-   |
-   |-- Web
-   |     |
-   |     --> BFF Web
-   |
-   |-- Mobile
-   |     |
-   |     --> BFF Mobile
-   |
-   |-- ATM
-         |
-         --> BFF ATM
+Frontend Web
+    |
+    v
+  BFF Web
+controller -> service -> client
+                         |
+                         v
+                      Core API
+              controller -> service -> repository
+                                      |
+                                      v
+                                    MySQL
 
-              |
-              v
-          Core API
-              |
-              v
-            MySQL
+
+Frontend Mobile
+    |
+    v
+ BFF Mobile
+controller -> service -> client
+                         |
+                         v
+                      Core API
+
+
+Frontend ATM
+    |
+    v
+  BFF ATM
+controller -> service -> client
+                         |
+                         v
+                      Core API
 ```
 
-Esta separación permite adaptar las respuestas de acuerdo con las necesidades de cada frontend sin duplicar la lógica principal de acceso a datos.
+Esta separación permite adaptar las respuestas según las necesidades de cada frontend sin duplicar la lógica principal de persistencia.
 
 ---
 
-## 3. Core API
+## 3. Organización interna de los servicios
 
-El módulo `bank-core-api` actúa como servicio central.
+La solución mantiene responsabilidades claramente separadas.
 
-Sus responsabilidades principales son:
-- acceso a la base de datos MySQL;
+### Core API
+
+El módulo `bank-core-api` contiene las capas:
+
+```text
+controller
+service
+repository
+entity
+dto
+mapper
+exception
+```
+
+Responsabilidades:
+
+- `controller`: recibe y gestiona las solicitudes HTTP;
+- `service`: concentra reglas de negocio y coordinación de casos de uso;
+- `repository`: se comunica con la persistencia mediante Spring Data JPA;
+- `entity`: representa las entidades persistentes;
+- `dto`: define objetos utilizados para intercambio de datos;
+- `mapper`: transforma entidades y DTO;
+- `exception`: centraliza el manejo de errores.
+
+### BFF Web, Mobile y ATM
+
+Cada BFF contiene principalmente:
+
+```text
+controller
+service
+client
+dto
+config
+auth
+exception
+```
+
+Los BFF **no implementan una capa Repository propia**, debido a que no acceden directamente a la base de datos.
+
+La persistencia está encapsulada en `bank-core-api`.
+
+En los BFF:
+
+- `controller`: recibe las solicitudes del canal;
+- `service`: adapta, transforma y coordina la información requerida;
+- `client`: se comunica con el Core API;
+- `dto`: define las respuestas específicas del canal;
+- `auth` y `config`: gestionan autenticación, autorización y seguridad;
+- `exception`: gestiona errores propios de la integración.
+
+De esta forma, la función del BFF se mantiene enfocada en adaptar y entregar datos según las necesidades del frontend correspondiente.
+
+---
+
+## 4. Core API
+
+El módulo `bank-core-api` funciona como servicio central de datos y reglas principales del dominio bancario.
+
+Sus responsabilidades incluyen:
+
 - consulta de cuentas;
 - consulta de movimientos;
-- registro de depósitos y retiros;
+- registro de operaciones;
 - actualización de saldos;
 - validación de operaciones;
+- acceso a MySQL;
 - manejo de errores del dominio.
 
-El Core API utiliza Spring Web, Spring Data JPA, Hibernate, MySQL y una organización por capas mediante Repository, Service, DTO, Mapper y manejo global de excepciones.
+Tecnologías utilizadas:
+
+- Spring Web;
+- Spring Data JPA;
+- Hibernate;
+- MySQL;
+- DTO y Mapper;
+- manejo global de excepciones.
 
 El servicio se ejecuta en:
+
 ```text
 http://localhost:8080
 ```
 
 ---
 
-## 4. BFF Web
+## 5. BFF Web
 
 El BFF Web está orientado a interfaces de navegador que pueden presentar una mayor cantidad de información.
 
 Se ejecuta en:
+
 ```text
 https://localhost:8081
 ```
 
 Características principales:
+
 - información completa de cuentas;
 - consulta de movimientos;
 - generación de dashboard;
@@ -87,20 +170,29 @@ Características principales:
 - autorización mediante `WEB_ACCESS`;
 - comunicación HTTPS.
 
-El canal Web entrega información como titular, edad, tipo de cuenta, saldo, tasa de interés e interés calculado.
+El canal Web entrega información como:
+
+- titular;
+- edad;
+- tipo de cuenta;
+- saldo;
+- tasa de interés;
+- interés calculado.
 
 ---
 
-## 5. BFF Mobile
+## 6. BFF Mobile
 
 El BFF Mobile está diseñado para reducir la cantidad de información transmitida y optimizar el consumo de recursos.
 
 Se ejecuta en:
+
 ```text
 https://localhost:8082
 ```
 
 Características principales:
+
 - respuestas ligeras;
 - información esencial de cuentas;
 - movimientos recientes;
@@ -109,20 +201,22 @@ Características principales:
 - autorización mediante `MOBILE_ACCESS`;
 - comunicación HTTPS.
 
-Este enfoque permite reducir el volumen de datos enviados a dispositivos móviles.
+Este enfoque reduce el volumen de datos enviados a dispositivos móviles.
 
 ---
 
-## 6. BFF ATM
+## 7. BFF ATM
 
-El BFF ATM está orientado exclusivamente a operaciones necesarias para un cajero automático.
+El BFF ATM está orientado a operaciones necesarias para un cajero automático.
 
 Se ejecuta en:
+
 ```text
 https://localhost:8083
 ```
 
 Operaciones principales:
+
 - consulta de saldo;
 - retiros;
 - validación de saldo disponible;
@@ -131,7 +225,8 @@ Operaciones principales:
 - autorización mediante `ATM_ACCESS`;
 - comunicación HTTPS.
 
-Para operaciones inválidas, como un retiro superior al saldo disponible, el sistema responde con códigos HTTP adecuados, por ejemplo:
+Para operaciones inválidas, como un retiro superior al saldo disponible, el sistema responde con códigos HTTP adecuados:
+
 ```text
 HTTP 409 Conflict
 SALDO_INSUFICIENTE
@@ -139,73 +234,102 @@ SALDO_INSUFICIENTE
 
 ---
 
-## 7. Autenticación y autorización
+## 8. Autenticación y autorización por canal
 
 Cada BFF implementa autenticación mediante JWT.
 
-Los scopes utilizados son:
+Scopes configurados:
+
 ```text
 WEB_ACCESS
 MOBILE_ACCESS
 ATM_ACCESS
 ```
 
-Cada canal utiliza una clave de firma independiente. Por esta razón, un token generado por un BFF no puede utilizarse para acceder a otro.
+Cada canal utiliza una clave de firma independiente.
+
+Por esta razón, un token generado por un BFF no puede reutilizarse en otro canal.
 
 Ejemplo:
+
 ```text
 Token Web -> BFF Web     = permitido
 Token Web -> BFF ATM     = rechazado
 Token Mobile -> BFF ATM  = rechazado
 ```
 
-Los endpoints protegidos sin token responden con `HTTP 401 Unauthorized`.
+Los endpoints protegidos sin token responden:
+
+```text
+HTTP 401 Unauthorized
+```
+
+Esto permite mantener una autorización diferenciada para cada frontend.
 
 ---
 
-## 8. Seguridad HTTPS
+## 9. Seguridad HTTPS
 
 Los tres BFF utilizan HTTPS.
 
-Para el entorno local se utiliza un certificado PKCS12 generado mediante `keytool`. El certificado se configura mediante variables de entorno y no se almacena en el repositorio Git.
+Para el entorno local se utiliza un certificado PKCS12 generado mediante `keytool`.
 
-Puertos seguros utilizados:
+El certificado se configura mediante variables de entorno y el archivo `.p12` se excluye del repositorio Git.
+
+Puertos seguros:
+
 ```text
 Web     8081 HTTPS
 Mobile  8082 HTTPS
 ATM     8083 HTTPS
 ```
 
-También se utilizan cabeceras de seguridad proporcionadas por Spring Security, como:
+También se utilizan cabeceras de seguridad proporcionadas por Spring Security, entre ellas:
+
 - Strict-Transport-Security;
 - X-Frame-Options;
 - X-Content-Type-Options.
 
 ---
 
-## 9. Persistencia
+## 10. Persistencia
 
 La información bancaria se almacena en MySQL.
 
 Base de datos:
+
 ```text
 banco_xyz_core
 ```
 
 Tablas principales:
+
 ```text
 cuentas
 movimientos
 ```
 
-Las operaciones realizadas desde los BFF son procesadas por el Core API y persistidas mediante Spring Data JPA.
+La persistencia se encuentra centralizada en `bank-core-api` mediante Spring Data JPA.
 
-Ejemplo de flujo:
+Flujo de una operación ATM:
+
 ```text
 BFF ATM
    |
    v
+Controller
+   |
+   v
+Service
+   |
+   v
+Client
+   |
+   v
 Core API
+   |
+   v
+Controller
    |
    v
 Service
@@ -217,20 +341,40 @@ Repository
 MySQL
 ```
 
+Esta separación evita que los BFF accedan directamente a la base de datos.
+
 ---
 
-## 10. Manejo de errores
+## 11. Enfoque sin Spring Batch
 
-La solución incorpora manejo de excepciones para evitar respuestas genéricas y entregar información adecuada a cada cliente.
+La solución de Semana 5 se implementa únicamente con **Spring Boot** y no utiliza Spring Batch.
+
+Los datos necesarios ya se encuentran disponibles en la base de datos, por lo que el proyecto se enfoca en:
+
+- exponer servicios;
+- aplicar reglas de negocio;
+- adaptar respuestas por canal;
+- proteger endpoints;
+- persistir operaciones.
+
+Esto mantiene la solución centrada en la arquitectura BFF y en la comunicación entre servicios.
+
+---
+
+## 12. Manejo de errores
+
+La solución incorpora manejo de excepciones para entregar respuestas controladas y coherentes.
 
 Se consideran situaciones como:
+
 - cuenta inexistente;
 - datos inválidos;
 - saldo insuficiente;
 - recursos no encontrados;
 - solicitudes no autorizadas.
 
-Ejemplos:
+Códigos HTTP utilizados:
+
 ```text
 400 Bad Request
 401 Unauthorized
@@ -240,16 +384,18 @@ Ejemplos:
 
 ---
 
-## 11. Observabilidad
+## 13. Observabilidad
 
 Se incorpora Spring Boot Actuator para verificar el estado de los servicios.
 
 Ejemplo:
+
 ```text
 /actuator/health
 ```
 
 Cuando el servicio se encuentra operativo se obtiene:
+
 ```text
 status: UP
 ```
@@ -258,9 +404,10 @@ Esto permite comprobar disponibilidad, readiness, liveness y estado general del 
 
 ---
 
-## 12. Modularidad y escalabilidad
+## 14. Modularidad y escalabilidad
 
-La solución se encuentra dividida en cuatro módulos principales:
+La solución se divide en cuatro módulos principales:
+
 ```text
 bank-core-api
 bff-web
@@ -268,31 +415,20 @@ bff-mobile
 bff-atm
 ```
 
-Cada módulo posee responsabilidades propias.
-
 Esta organización permite:
-- modificar un canal sin afectar los demás;
+
+- modificar un canal sin afectar directamente a los demás;
+- mantener separadas las responsabilidades;
 - agregar nuevos BFF en el futuro;
-- mantener separada la lógica de presentación de la lógica de datos;
-- escalar los servicios de manera independiente;
-- reducir acoplamiento.
+- escalar servicios de forma independiente;
+- reducir el acoplamiento;
+- centralizar la persistencia y las reglas comunes.
 
-Además, internamente se utilizan capas como:
-
-```text
-controller
-service
-client
-repository
-dto
-mapper
-config
-exception
-```
+Cada BFF conserva su propia lógica de adaptación y seguridad, mientras que el Core API concentra la comunicación con la base de datos.
 
 ---
 
-## 13. Tecnologías utilizadas
+## 15. Tecnologías utilizadas
 
 - Java
 - Spring Boot
@@ -311,12 +447,14 @@ exception
 
 ---
 
-## 14. Conclusión
+## 16. Conclusión
 
-La propuesta permite implementar el patrón Backend for Frontend de forma independiente para los tres canales solicitados por Banco XYZ.
+La propuesta implementa el patrón Backend for Frontend mediante tres backends independientes para Web, Mobile y ATM.
 
-Web recibe información completa, Mobile utiliza respuestas más livianas y ATM dispone únicamente de operaciones críticas.
+Cada canal dispone de un `controller`, una capa `service` y una capa `client` encargada de comunicarse con el Core API. Los BFF no acceden directamente a la persistencia, por lo que no requieren una capa Repository propia.
 
-La solución incorpora autenticación y autorización específica por canal, HTTPS, certificados, manejo de errores, persistencia en MySQL y observabilidad.
+El módulo `bank-core-api` concentra las capas `controller`, `service` y `repository`, además de las entidades y el acceso a MySQL mediante Spring Data JPA.
 
-La arquitectura modular permite además extender o escalar cada canal sin afectar directamente a los demás componentes del sistema.
+Web recibe información completa, Mobile utiliza respuestas más livianas y ATM dispone de operaciones críticas y controladas.
+
+La solución incorpora JWT específico por canal, HTTPS, manejo de errores, observabilidad y persistencia, manteniendo una arquitectura modular y coherente con la estrategia BFF seleccionada.
