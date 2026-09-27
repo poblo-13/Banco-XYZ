@@ -20,16 +20,31 @@
 
     <packaging>pom</packaging>
 
-    <name>Banco XYZ - BFF Semana 5</name>
+    <name>Banco XYZ - Exp3 Semana 7</name>
     <description>
-        Implementación Backend for Frontend para Web, Mobile y ATM
+        Microservicios, resiliencia y arquitectura orientada a eventos
     </description>
 
     <properties>
         <java.version>21</java.version>
+        <spring-cloud.version>2025.1.2</spring-cloud.version>
     </properties>
 
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <modules>
+        <module>config-server</module>
+        <module>discovery-server</module>
         <module>bank-core-api</module>
         <module>bff-web</module>
         <module>bff-mobile</module>
@@ -37,3 +52,4 @@
     </modules>
 
 </project>
+
