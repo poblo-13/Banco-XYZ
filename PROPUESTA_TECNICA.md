@@ -1,300 +1,162 @@
 # Propuesta Técnica
-## Banco XYZ - Backend for Frontend (BFF)
-### Exp2 - Semana 5
+## Banco XYZ - Arquitectura de Microservicios, Resiliencia y Eventos
+### Exp3 - Semana 7
 
 ## 1. Introducción
 
-Para la modernización del sistema Banco XYZ se implementa una arquitectura basada en el patrón **Backend for Frontend (BFF)**, separando la atención de los distintos tipos de clientes en backends especializados.
+La solución de Banco XYZ evoluciona desde la arquitectura Backend for Frontend (BFF) implementada en semanas anteriores hacia una arquitectura de microservicios con mecanismos de configuración centralizada, descubrimiento de servicios, tolerancia a fallos y comunicación asíncrona orientada a eventos.
 
-La solución contempla tres canales:
+La propuesta mantiene tres canales especializados:
 
-- Web
-- Mobile
-- Cajero Automático (ATM)
+- Web;
+- Mobile;
+- Cajero Automático (ATM).
 
-Cada canal posee necesidades diferentes en cuanto a cantidad de información, operaciones disponibles y seguridad. Por esta razón, se implementa un BFF independiente para cada uno.
+Cada canal conserva su propio BFF y su esquema de seguridad, mientras que el `bank-core-api` centraliza las reglas principales del dominio bancario y la persistencia.
 
----
+Durante Semana 7 se incorporan principalmente:
 
-## 2. Estrategia de implementación
-
-La estrategia seleccionada utiliza un **Core API central** encargado de la lógica de acceso a los datos bancarios y tres BFF independientes que consumen dicho servicio.
-
-La arquitectura general es:
-
-```text
-Frontend Web
-    |
-    v
-  BFF Web
-controller -> service -> client
-                         |
-                         v
-                      Core API
-              controller -> service -> repository
-                                      |
-                                      v
-                                    MySQL
-
-
-Frontend Mobile
-    |
-    v
- BFF Mobile
-controller -> service -> client
-                         |
-                         v
-                      Core API
-
-
-Frontend ATM
-    |
-    v
-  BFF ATM
-controller -> service -> client
-                         |
-                         v
-                      Core API
-```
-
-Esta separación permite adaptar las respuestas según las necesidades de cada frontend sin duplicar la lógica principal de persistencia.
+- Spring Cloud Config;
+- Eureka Service Discovery;
+- Resilience4j;
+- Apache Kafka;
+- un servicio consumidor de auditoría;
+- escalabilidad mediante particiones y grupos de consumidores.
 
 ---
 
-## 3. Organización interna de los servicios
+## 2. Objetivo técnico
 
-La solución mantiene responsabilidades claramente separadas.
+El objetivo es fortalecer la arquitectura del sistema Banco XYZ incorporando mecanismos que permitan:
 
-### Core API
-
-El módulo `bank-core-api` contiene las capas:
-
-```text
-controller
-service
-repository
-entity
-dto
-mapper
-exception
-```
-
-Responsabilidades:
-
-- `controller`: recibe y gestiona las solicitudes HTTP;
-- `service`: concentra reglas de negocio y coordinación de casos de uso;
-- `repository`: se comunica con la persistencia mediante Spring Data JPA;
-- `entity`: representa las entidades persistentes;
-- `dto`: define objetos utilizados para intercambio de datos;
-- `mapper`: transforma entidades y DTO;
-- `exception`: centraliza el manejo de errores.
-
-### BFF Web, Mobile y ATM
-
-Cada BFF contiene principalmente:
-
-```text
-controller
-service
-client
-dto
-config
-auth
-exception
-```
-
-Los BFF **no implementan una capa Repository propia**, debido a que no acceden directamente a la base de datos.
-
-La persistencia está encapsulada en `bank-core-api`.
-
-En los BFF:
-
-- `controller`: recibe las solicitudes del canal;
-- `service`: adapta, transforma y coordina la información requerida;
-- `client`: se comunica con el Core API;
-- `dto`: define las respuestas específicas del canal;
-- `auth` y `config`: gestionan autenticación, autorización y seguridad;
-- `exception`: gestiona errores propios de la integración.
-
-De esta forma, la función del BFF se mantiene enfocada en adaptar y entregar datos según las necesidades del frontend correspondiente.
+- desacoplar responsabilidades entre servicios;
+- centralizar configuraciones;
+- registrar y descubrir servicios;
+- responder de forma controlada ante fallas;
+- publicar eventos bancarios de manera asíncrona;
+- procesar eventos en servicios independientes;
+- distribuir carga entre múltiples consumidores;
+- mantener seguridad diferenciada por canal.
 
 ---
 
-## 4. Core API
+## 3. Arquitectura general
 
-El módulo `bank-core-api` funciona como servicio central de datos y reglas principales del dominio bancario.
-
-Sus responsabilidades incluyen:
-
-- consulta de cuentas;
-- consulta de movimientos;
-- registro de operaciones;
-- actualización de saldos;
-- validación de operaciones;
-- acceso a MySQL;
-- manejo de errores del dominio.
-
-Tecnologías utilizadas:
-
-- Spring Web;
-- Spring Data JPA;
-- Hibernate;
-- MySQL;
-- DTO y Mapper;
-- manejo global de excepciones.
-
-El servicio se ejecuta en:
+La arquitectura está compuesta por los siguientes módulos:
 
 ```text
-http://localhost:8080
+config-server
+discovery-server
+bank-core-api
+bff-web
+bff-mobile
+bff-atm
+audit-service
+```
+
+Flujo general:
+
+```text
+Cliente
+   |
+   +-----------------------------+
+   |             |               |
+ BFF Web      BFF Mobile      BFF ATM
+  :8081          :8082          :8083
+                                   |
+                             Resilience4j
+                                   |
+                                   v
+                            Bank Core API
+                                :8080
+                              /       \
+                             /         \
+                          MySQL        Kafka
+                                      :9092
+                                        |
+                                        v
+                              banco.movimientos
+                               3 particiones
+                                        |
+                                        v
+                               Audit Service
+                            grupo banco-auditoria
+```
+
+Servicios de soporte:
+
+```text
+Config Server   -> :8888
+Eureka Server   -> :8761
 ```
 
 ---
 
-## 5. BFF Web
+## 4. Backend for Frontend
 
-El BFF Web está orientado a interfaces de navegador que pueden presentar una mayor cantidad de información.
+La solución mantiene tres BFF independientes.
 
-Se ejecuta en:
+### BFF Web
+
+Orientado a interfaces de navegador y respuestas más completas.
 
 ```text
 https://localhost:8081
 ```
 
-Características principales:
+Scope:
 
-- información completa de cuentas;
-- consulta de movimientos;
-- generación de dashboard;
-- autenticación JWT;
-- autorización mediante `WEB_ACCESS`;
-- comunicación HTTPS.
+```text
+WEB_ACCESS
+```
 
-El canal Web entrega información como:
+### BFF Mobile
 
-- titular;
-- edad;
-- tipo de cuenta;
-- saldo;
-- tasa de interés;
-- interés calculado.
-
----
-
-## 6. BFF Mobile
-
-El BFF Mobile está diseñado para reducir la cantidad de información transmitida y optimizar el consumo de recursos.
-
-Se ejecuta en:
+Orientado a respuestas más ligeras para dispositivos móviles.
 
 ```text
 https://localhost:8082
 ```
 
-Características principales:
+Scope:
 
-- respuestas ligeras;
-- información esencial de cuentas;
-- movimientos recientes;
-- resumen simplificado;
-- autenticación JWT;
-- autorización mediante `MOBILE_ACCESS`;
-- comunicación HTTPS.
+```text
+MOBILE_ACCESS
+```
 
-Este enfoque reduce el volumen de datos enviados a dispositivos móviles.
+### BFF ATM
 
----
-
-## 7. BFF ATM
-
-El BFF ATM está orientado a operaciones necesarias para un cajero automático.
-
-Se ejecuta en:
+Orientado a operaciones específicas de cajero automático.
 
 ```text
 https://localhost:8083
 ```
 
-Operaciones principales:
-
-- consulta de saldo;
-- retiros;
-- validación de saldo disponible;
-- manejo de errores de operación;
-- autenticación JWT;
-- autorización mediante `ATM_ACCESS`;
-- comunicación HTTPS.
-
-Para operaciones inválidas, como un retiro superior al saldo disponible, el sistema responde con códigos HTTP adecuados:
+Scope:
 
 ```text
-HTTP 409 Conflict
-SALDO_INSUFICIENTE
-```
-
----
-
-## 8. Autenticación y autorización por canal
-
-Cada BFF implementa autenticación mediante JWT.
-
-Scopes configurados:
-
-```text
-WEB_ACCESS
-MOBILE_ACCESS
 ATM_ACCESS
 ```
 
-Cada canal utiliza una clave de firma independiente.
-
-Por esta razón, un token generado por un BFF no puede reutilizarse en otro canal.
-
-Ejemplo:
-
-```text
-Token Web -> BFF Web     = permitido
-Token Web -> BFF ATM     = rechazado
-Token Mobile -> BFF ATM  = rechazado
-```
-
-Los endpoints protegidos sin token responden:
-
-```text
-HTTP 401 Unauthorized
-```
-
-Esto permite mantener una autorización diferenciada para cada frontend.
+Los BFF no acceden directamente a MySQL. La persistencia permanece encapsulada en `bank-core-api`.
 
 ---
 
-## 9. Seguridad HTTPS
+## 5. Core API
 
-Los tres BFF utilizan HTTPS.
+El módulo `bank-core-api` centraliza la lógica bancaria.
 
-Para el entorno local se utiliza un certificado PKCS12 generado mediante `keytool`.
+Responsabilidades principales:
 
-El certificado se configura mediante variables de entorno y el archivo `.p12` se excluye del repositorio Git.
-
-Puertos seguros:
-
-```text
-Web     8081 HTTPS
-Mobile  8082 HTTPS
-ATM     8083 HTTPS
-```
-
-También se utilizan cabeceras de seguridad proporcionadas por Spring Security, entre ellas:
-
-- Strict-Transport-Security;
-- X-Frame-Options;
-- X-Content-Type-Options.
-
----
-
-## 10. Persistencia
-
-La información bancaria se almacena en MySQL.
+- consulta de cuentas;
+- consulta de movimientos;
+- registro de depósitos;
+- registro de retiros;
+- registro de compras;
+- actualización de saldos;
+- validación de saldo disponible;
+- persistencia mediante Spring Data JPA;
+- publicación de eventos de movimientos.
 
 Base de datos:
 
@@ -309,84 +171,443 @@ cuentas
 movimientos
 ```
 
-La persistencia se encuentra centralizada en `bank-core-api` mediante Spring Data JPA.
+---
 
-Flujo de una operación ATM:
+## 6. Configuración centralizada
+
+Se incorpora `config-server` utilizando Spring Cloud Config Server.
+
+Puerto:
+
+```text
+8888
+```
+
+El Core API consume propiedades desde:
+
+```text
+config-repo/bank-core-api.properties
+```
+
+Entre las propiedades centralizadas se encuentran:
+
+- URL de Eureka;
+- broker Kafka;
+- serializadores Kafka;
+- tópico de movimientos;
+- propiedades de observabilidad.
+
+Esto permite separar parte de la configuración operacional del código de la aplicación.
+
+---
+
+## 7. Service Discovery
+
+Se incorpora `discovery-server` mediante Netflix Eureka.
+
+Puerto:
+
+```text
+8761
+```
+
+El `bank-core-api` se registra dinámicamente como:
+
+```text
+BANK-CORE-API
+```
+
+Durante las pruebas se verificó su estado:
+
+```text
+UP
+```
+
+Este mecanismo permite registrar servicios y facilita una arquitectura preparada para descubrimiento dinámico.
+
+---
+
+## 8. Tolerancia a fallos con Resilience4j
+
+El BFF ATM incorpora un Circuit Breaker denominado:
+
+```text
+coreApi
+```
+
+El objetivo es evitar que las fallas de comunicación con el Core API provoquen respuestas descontroladas o llamadas repetitivas innecesarias.
+
+Configuración utilizada:
+
+```text
+sliding-window-type: COUNT_BASED
+sliding-window-size: 3
+minimum-number-of-calls: 3
+failure-rate-threshold: 50
+wait-duration-in-open-state: 10s
+permitted-number-of-calls-in-half-open-state: 1
+automatic-transition-from-open-to-half-open-enabled: true
+```
+
+Cuando el Core API no está disponible, el BFF ATM responde de manera controlada:
+
+```text
+HTTP 503 Service Unavailable
+CORE_NO_DISPONIBLE
+```
+
+Se verificó el ciclo completo del Circuit Breaker:
+
+```text
+CLOSED
+   |
+   v
+OPEN
+   |
+   v
+HALF_OPEN
+   |
+   v
+CLOSED
+```
+
+También se configuraron excepciones funcionales que no deben contabilizarse como fallas de infraestructura, por ejemplo:
+
+```text
+AtmRecursoNoEncontradoException
+AtmSaldoInsuficienteException
+```
+
+De esta forma, una cuenta inexistente continúa respondiendo con su error funcional y no abre el Circuit Breaker.
+
+---
+
+## 9. Arquitectura orientada a eventos
+
+Para la mensajería asíncrona se seleccionó Apache Kafka.
+
+La razón principal es que Kafka permite:
+
+- desacoplar productores y consumidores;
+- conservar eventos en un tópico;
+- trabajar con particiones;
+- distribuir procesamiento mediante Consumer Groups;
+- escalar consumidores horizontalmente.
+
+Kafka se ejecuta mediante Docker utilizando:
+
+```text
+docker-compose.kafka.yml
+```
+
+Broker:
+
+```text
+localhost:9092
+```
+
+---
+
+## 10. Tópico y eventos
+
+Tópico principal:
+
+```text
+banco.movimientos
+```
+
+Configuración:
+
+```text
+Particiones: 3
+Factor de replicación: 1
+```
+
+Tipos de eventos implementados:
+
+```text
+DEPOSITO_REALIZADO
+RETIRO_REALIZADO
+COMPRA_REALIZADA
+```
+
+Contrato utilizado:
+
+```text
+MovimientoEvento
+```
+
+Campos principales:
+
+```text
+tipoEvento
+movimientoId
+cuentaId
+tipoMovimiento
+monto
+saldoResultante
+fechaMovimiento
+fechaEvento
+```
+
+Ejemplo validado:
+
+```json
+{
+  "tipoEvento": "RETIRO_REALIZADO",
+  "movimientoId": 13,
+  "cuentaId": 101,
+  "tipoMovimiento": "retiro",
+  "monto": -100.00,
+  "saldoResultante": 4850.00
+}
+```
+
+---
+
+## 11. Patrón de publicación de eventos
+
+La solución utiliza un enfoque de notificación de eventos posterior a la confirmación de la transacción.
+
+Dentro de `MovimientoService` se publica primero un evento interno mediante:
+
+```text
+ApplicationEventPublisher
+```
+
+El componente `KafkaMovimientoPublisher` escucha ese evento con:
+
+```text
+@TransactionalEventListener(
+    phase = TransactionPhase.AFTER_COMMIT
+)
+```
+
+Después del COMMIT se envía el evento a Kafka.
+
+Flujo:
+
+```text
+Operación bancaria
+      |
+      v
+Validación
+      |
+      v
+Persistencia MySQL
+      |
+      v
+COMMIT exitoso
+      |
+      v
+Evento interno
+      |
+      v
+KafkaMovimientoPublisher
+      |
+      v
+banco.movimientos
+```
+
+Esta decisión evita publicar el evento antes de que la operación bancaria haya sido confirmada en la base de datos.
+
+---
+
+## 12. Clave Kafka y orden de eventos
+
+Cada evento utiliza como clave:
+
+```text
+cuentaId
+```
+
+Ejemplo:
+
+```text
+Key: 101
+```
+
+El uso de `cuentaId` permite que los eventos asociados a una misma cuenta sean dirigidos consistentemente a una partición, conservando su orden relativo dentro de ella.
+
+Al mismo tiempo, diferentes cuentas pueden distribuirse entre las distintas particiones.
+
+---
+
+## 13. Consumidor de auditoría
+
+Se incorpora un nuevo módulo:
+
+```text
+audit-service
+```
+
+Su responsabilidad es consumir de manera asíncrona los eventos del tópico:
+
+```text
+banco.movimientos
+```
+
+Grupo:
+
+```text
+banco-auditoria
+```
+
+El consumidor procesa:
+
+- key;
+- partition;
+- offset;
+- payload.
+
+Ejemplo validado:
+
+```text
+AUDITORIA [auditoria-1] evento procesado:
+key=101
+particion=2
+offset=0
+payload={"tipoEvento":"RETIRO_REALIZADO", ...}
+```
+
+El servicio utiliza `StringDeserializer` para consumir el JSON producido por el Core API.
+
+---
+
+## 14. Escalabilidad horizontal
+
+El tópico `banco.movimientos` posee tres particiones.
+
+Se ejecutaron simultáneamente dos instancias de `audit-service` dentro del mismo grupo:
+
+```text
+banco-auditoria
+```
+
+Kafka realizó automáticamente un rebalanceo.
+
+Distribución observada:
+
+```text
+Consumidor 1 -> particiones 0 y 1
+Consumidor 2 -> partición 2
+```
+
+La inspección del grupo mostró dos `CONSUMER-ID` distintos y las particiones distribuidas entre ambos consumidores.
+
+Esto demuestra que el procesamiento puede escalar horizontalmente al agregar nuevas instancias del mismo consumidor.
+
+---
+
+## 15. Prueba funcional completa
+
+Se ejecutó un retiro real mediante el BFF ATM.
+
+Datos:
+
+```text
+Cuenta: 101
+Saldo inicial: 4950.00
+Monto retirado: 100.00
+Saldo resultante: 4850.00
+Estado: APROBADO
+```
+
+El flujo observado fue:
 
 ```text
 BFF ATM
    |
    v
-Controller
+Bank Core API
    |
-   v
-Service
+   +--> MySQL
    |
-   v
-Client
-   |
-   v
-Core API
-   |
-   v
-Controller
-   |
-   v
-Service
-   |
-   v
-Repository
-   |
-   v
-MySQL
+   +--> AFTER_COMMIT
+           |
+           v
+          Kafka
+           |
+           v
+   banco.movimientos
+           |
+           v
+     audit-service
 ```
 
-Esta separación evita que los BFF accedan directamente a la base de datos.
+Kafka registró:
+
+```text
+Key: 101
+Partition: 2
+Offset: 0
+Evento: RETIRO_REALIZADO
+Saldo resultante: 4850.00
+```
+
+Posteriormente, `audit-service` procesó el mismo evento.
 
 ---
 
-## 11. Enfoque sin Spring Batch
+## 16. Seguridad
 
-La solución de Semana 5 se implementa únicamente con **Spring Boot** y no utiliza Spring Batch.
+Los BFF mantienen:
 
-Los datos necesarios ya se encuentran disponibles en la base de datos, por lo que el proyecto se enfoca en:
+- Spring Security;
+- JWT;
+- OAuth2 Resource Server;
+- HTTPS;
+- scopes independientes;
+- secretos JWT separados por canal.
 
-- exponer servicios;
-- aplicar reglas de negocio;
-- adaptar respuestas por canal;
-- proteger endpoints;
-- persistir operaciones.
+Scopes:
 
-Esto mantiene la solución centrada en la arquitectura BFF y en la comunicación entre servicios.
+```text
+WEB_ACCESS
+MOBILE_ACCESS
+ATM_ACCESS
+```
+
+Comportamiento validado:
+
+```text
+Sin token           -> 401 Unauthorized
+Token correcto      -> acceso permitido
+Token de otro canal -> acceso rechazado
+```
+
+El certificado PKCS12 se mantiene fuera del repositorio Git.
 
 ---
 
-## 12. Manejo de errores
+## 17. Manejo de errores
 
-La solución incorpora manejo de excepciones para entregar respuestas controladas y coherentes.
+La solución mantiene manejo controlado de errores funcionales y de infraestructura.
 
-Se consideran situaciones como:
-
-- cuenta inexistente;
-- datos inválidos;
-- saldo insuficiente;
-- recursos no encontrados;
-- solicitudes no autorizadas.
-
-Códigos HTTP utilizados:
+Ejemplos:
 
 ```text
 400 Bad Request
 401 Unauthorized
 404 Not Found
 409 Conflict
+503 Service Unavailable
 ```
+
+Ejemplos de códigos propios:
+
+```text
+SALDO_INSUFICIENTE
+CORE_NO_DISPONIBLE
+```
+
+Como mejora futura se propone estandarizar una estructura común de error para todos los BFF y el Core API.
 
 ---
 
-## 13. Observabilidad
+## 18. Observabilidad
 
-Se incorpora Spring Boot Actuator para verificar el estado de los servicios.
+Spring Boot Actuator permite consultar el estado de los servicios.
 
 Ejemplo:
 
@@ -394,67 +615,132 @@ Ejemplo:
 /actuator/health
 ```
 
-Cuando el servicio se encuentra operativo se obtiene:
+En el BFF ATM también se utilizaron métricas de Resilience4j para verificar los estados del Circuit Breaker:
 
 ```text
-status: UP
+resilience4j.circuitbreaker.state
+resilience4j.circuitbreaker.calls
+resilience4j.circuitbreaker.failure.rate
+resilience4j.circuitbreaker.not.permitted.calls
 ```
 
-Esto permite comprobar disponibilidad, readiness, liveness y estado general del servicio.
+Estas métricas permitieron comprobar los estados `OPEN`, `HALF_OPEN` y `CLOSED`.
 
 ---
 
-## 14. Modularidad y escalabilidad
+## 19. Compilación y validación
 
-La solución se divide en cuatro módulos principales:
+Se ejecutó:
+
+```powershell
+.\mvnw.cmd verify
+```
+
+Resultado:
 
 ```text
-bank-core-api
-bff-web
-bff-mobile
-bff-atm
+Banco XYZ - Exp3 Semana 7 ........ SUCCESS
+Banco XYZ - Config Server ........ SUCCESS
+Banco XYZ - Discovery Server ..... SUCCESS
+Banco XYZ - Core API ............. SUCCESS
+Banco XYZ - BFF Web .............. SUCCESS
+Banco XYZ - BFF Mobile ........... SUCCESS
+Banco XYZ - BFF ATM .............. SUCCESS
+Banco XYZ - Audit Service ........ SUCCESS
+
+BUILD SUCCESS
 ```
 
-Esta organización permite:
-
-- modificar un canal sin afectar directamente a los demás;
-- mantener separadas las responsabilidades;
-- agregar nuevos BFF en el futuro;
-- escalar servicios de forma independiente;
-- reducir el acoplamiento;
-- centralizar la persistencia y las reglas comunes.
-
-Cada BFF conserva su propia lógica de adaptación y seguridad, mientras que el Core API concentra la comunicación con la base de datos.
+Esto valida la compilación integrada de los ocho módulos Maven del proyecto.
 
 ---
 
-## 15. Tecnologías utilizadas
+## 20. Decisiones técnicas
 
-- Java
-- Spring Boot
-- Spring Web
-- Spring Security
-- OAuth2 Resource Server
-- JWT
-- Spring Data JPA
-- Hibernate
-- MySQL
-- Maven
-- HTTPS / TLS
-- Spring Boot Actuator
-- Git
-- GitHub
+### Kafka en lugar de JMS
+
+Se seleccionó Kafka porque el escenario requiere comunicación orientada a eventos y permite demostrar particionamiento, retención de eventos y escalabilidad mediante grupos de consumidores.
+
+### Tres particiones
+
+El tópico utiliza tres particiones para permitir distribución de carga entre consumidores.
+
+### `cuentaId` como key
+
+Permite mantener juntos los eventos de una misma cuenta y conservar su orden relativo.
+
+### AFTER_COMMIT
+
+Evita publicar un evento de negocio antes de que la operación haya sido confirmada en MySQL.
+
+### Audit Service desacoplado
+
+El consumidor no forma parte del Core API. Esto permite que el procesamiento de auditoría evolucione y escale de manera independiente.
 
 ---
 
-## 16. Conclusión
+## 21. Limitaciones del entorno de desarrollo
 
-La propuesta implementa el patrón Backend for Frontend mediante tres backends independientes para Web, Mobile y ATM.
+La implementación de Semana 7 se ejecuta en un entorno local de desarrollo.
 
-Cada canal dispone de un `controller`, una capa `service` y una capa `client` encargada de comunicarse con el Core API. Los BFF no acceden directamente a la persistencia, por lo que no requieren una capa Repository propia.
+Kafka utiliza:
 
-El módulo `bank-core-api` concentra las capas `controller`, `service` y `repository`, además de las entidades y el acceso a MySQL mediante Spring Data JPA.
+```text
+1 broker
+replication-factor = 1
+```
 
-Web recibe información completa, Mobile utiliza respuestas más livianas y ATM dispone de operaciones críticas y controladas.
+Esto es suficiente para demostrar funcionalidad, particionamiento y escalabilidad de consumidores, pero no representa una topología de alta disponibilidad para producción.
 
-La solución incorpora JWT específico por canal, HTTPS, manejo de errores, observabilidad y persistencia, manteniendo una arquitectura modular y coherente con la estrategia BFF seleccionada.
+El `audit-service` actualmente demuestra consumo y procesamiento mediante logs; una evolución futura podría persistir auditorías en una base de datos independiente.
+
+---
+
+## 22. Mejoras futuras
+
+Como evolución de la solución se consideran:
+
+- propagar identidad delegable hacia el Core API para mejorar trazabilidad y auditoría;
+- estandarizar códigos y estructuras de error entre BFF y Core;
+- persistir auditorías procesadas por `audit-service`;
+- incorporar idempotencia del consumidor;
+- agregar una estrategia de Dead Letter Topic para eventos que no puedan procesarse;
+- desplegar Kafka con replicación real para alta disponibilidad;
+- incorporar métricas y dashboards de observabilidad;
+- externalizar más configuraciones de los servicios mediante Config Server.
+
+---
+
+## 23. Tecnologías utilizadas
+
+- Java;
+- Spring Boot 4;
+- Spring Cloud Config;
+- Netflix Eureka;
+- Spring Security;
+- OAuth2 Resource Server;
+- JWT;
+- Resilience4j;
+- Spring Data JPA;
+- Hibernate;
+- MySQL;
+- Apache Kafka;
+- Spring Kafka;
+- Docker;
+- Maven;
+- HTTPS / TLS;
+- Spring Boot Actuator;
+- Git;
+- GitHub.
+
+---
+
+## 24. Conclusión
+
+La solución de Banco XYZ evoluciona desde una arquitectura BFF hacia una arquitectura de microservicios con mecanismos de configuración centralizada, descubrimiento, seguridad, resiliencia y mensajería asíncrona.
+
+Resilience4j permite controlar fallas de comunicación entre el BFF ATM y el Core API, entregando respuestas controladas cuando el servicio central no está disponible.
+
+Apache Kafka desacopla la generación de movimientos bancarios de su procesamiento posterior. El tópico `banco.movimientos`, junto con tres particiones y el grupo `banco-auditoria`, permite distribuir eventos entre múltiples consumidores y demostrar escalabilidad horizontal.
+
+La publicación posterior al COMMIT mantiene coherencia entre la operación persistida y el evento emitido, mientras que la separación entre productores y consumidores mantiene una arquitectura modular, extensible y preparada para futuras mejoras.
