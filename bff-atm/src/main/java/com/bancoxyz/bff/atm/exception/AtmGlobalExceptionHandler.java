@@ -83,4 +83,23 @@ public class AtmGlobalExceptionHandler {
                 .badRequest()
                 .body(error);
     }
+    @ExceptionHandler(AtmCoreNoDisponibleException.class)
+    public ResponseEntity<AtmApiErrorResponse> manejarCoreNoDisponible(
+            AtmCoreNoDisponibleException ex,
+            HttpServletRequest request) {
+
+        AtmApiErrorResponse error =
+                new AtmApiErrorResponse(
+                        LocalDateTime.now(),
+                        HttpStatus.SERVICE_UNAVAILABLE.value(),
+                        "CORE_NO_DISPONIBLE",
+                        ex.getMessage(),
+                        request.getRequestURI(),
+                        List.of()
+                );
+
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(error);
+    }
 }
