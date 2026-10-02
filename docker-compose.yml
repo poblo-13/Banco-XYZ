@@ -1,0 +1,212 @@
+services:
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: banco_xyz_core
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - banco-net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  kafka:
+    image: apache/kafka:4.3.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - banco-net
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  config-server:
+    build:
+      context: .
+      dockerfile: config-server/Dockerfile
+    image: banco-xyz-config-server:semana8
+    environment:
+      CONFIG_REPO_LOCATION: file:/config-repo
+    volumes:
+      - ./config-repo:/config-repo:ro
+    ports:
+      - "8888:8888"
+    networks:
+      - banco-net
+    restart: on-failure
+
+  discovery-server:
+    build:
+      context: .
+      dockerfile: discovery-server/Dockerfile
+    image: banco-xyz-discovery-server:semana8
+    ports:
+      - "8761:8761"
+    networks:
+      - banco-net
+    restart: on-failure
+
+  authorization-server:
+    build:
+      context: .
+      dockerfile: authorization-server/Dockerfile
+    image: banco-xyz-authorization-server:semana8
+    environment:
+      AUTH_ISSUER: http://authorization-server:9000
+      OAUTH_WEB_CLIENT_SECRET: ${OAUTH_WEB_CLIENT_SECRET}
+      OAUTH_MOBILE_CLIENT_SECRET: ${OAUTH_MOBILE_CLIENT_SECRET}
+      OAUTH_ATM_CLIENT_SECRET: ${OAUTH_ATM_CLIENT_SECRET}
+    ports:
+      - "9000:9000"
+    networks:
+      - banco-net
+    restart: on-failure
+
+  bank-core-api:
+    build:
+      context: .
+      dockerfile: bank-core-api/Dockerfile
+    image: banco-xyz-bank-core-api:semana8
+    environment:
+      CONFIG_SERVER_IMPORT: configserver:http://config-server:8888
+      DB_URL: jdbc:mysql://mysql:3306/banco_xyz_core?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      EUREKA_URL: http://discovery-server:8761/eureka/
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      config-server:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+    networks:
+      - banco-net
+    restart: on-failure
+
+  bff-web:
+    build:
+      context: .
+      dockerfile: bff-web/Dockerfile
+    image: banco-xyz-bff-web:semana8
+    environment:
+      CORE_API_BASE_URL: http://bank-core-api:8080
+      OAUTH_ISSUER_URI: http://authorization-server:9000
+      OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
+      SSL_ENABLED: "false"
+    ports:
+      - "8081:8081"
+    depends_on:
+      - bank-core-api
+      - authorization-server
+    networks:
+      - banco-net
+    restart: on-failure
+
+  bff-mobile:
+    build:
+      context: .
+      dockerfile: bff-mobile/Dockerfile
+    image: banco-xyz-bff-mobile:semana8
+    environment:
+      CORE_API_BASE_URL: http://bank-core-api:8080
+      OAUTH_ISSUER_URI: http://authorization-server:9000
+      OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
+      SSL_ENABLED: "false"
+    ports:
+      - "8082:8082"
+    depends_on:
+      - bank-core-api
+      - authorization-server
+    networks:
+      - banco-net
+    restart: on-failure
+
+  bff-atm:
+    build:
+      context: .
+      dockerfile: bff-atm/Dockerfile
+    image: banco-xyz-bff-atm:semana8
+    environment:
+      CORE_API_BASE_URL: http://bank-core-api:8080
+      OAUTH_ISSUER_URI: http://authorization-server:9000
+      OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
+      SSL_ENABLED: "false"
+    ports:
+      - "8083:8083"
+    depends_on:
+      - bank-core-api
+      - authorization-server
+    networks:
+      - banco-net
+    restart: on-failure
+
+  audit-service-1:
+    build:
+      context: .
+      dockerfile: audit-service/Dockerfile
+    image: banco-xyz-audit-service:semana8
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      AUDIT_INSTANCE: auditoria-1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - banco-net
+    restart: on-failure
+
+  audit-service-2:
+    build:
+      context: .
+      dockerfile: audit-service/Dockerfile
+    image: banco-xyz-audit-service:semana8
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      AUDIT_INSTANCE: auditoria-2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - banco-net
+    restart: on-failure
+
+networks:
+  banco-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  kafka-data:

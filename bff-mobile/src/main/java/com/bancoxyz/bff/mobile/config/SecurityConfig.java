@@ -17,10 +17,8 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
 
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
-                                "/auth/token",
-                                "/actuator/health"
-                        ).permitAll()
+                        .requestMatchers("/actuator/health")
+                        .permitAll()
 
                         .requestMatchers("/api/mobile/**")
                         .hasAuthority("SCOPE_MOBILE_ACCESS")

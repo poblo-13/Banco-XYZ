@@ -20,7 +20,7 @@
 
     <packaging>pom</packaging>
 
-    <name>Banco XYZ - Exp3 Semana 7</name>
+    <name>Banco XYZ - Exp3 Semana 8</name>
     <description>
         Microservicios, resiliencia y arquitectura orientada a eventos
     </description>
@@ -50,6 +50,7 @@
         <module>bff-mobile</module>
         <module>bff-atm</module>
         <module>audit-service</module>
+        <module>authorization-server</module>
 </modules>
 
 </project>
