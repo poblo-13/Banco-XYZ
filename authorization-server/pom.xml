@@ -13,15 +13,15 @@
         <version>0.0.1-SNAPSHOT</version>
     </parent>
 
-    <artifactId>config-server</artifactId>
+    <artifactId>authorization-server</artifactId>
 
-    <name>Banco XYZ - Config Server</name>
+    <name>Banco XYZ - Authorization Server</name>
 
     <dependencies>
 
         <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-config-server</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-oauth2-authorization-server</artifactId>
         </dependency>
 
         <dependency>

@@ -40,3 +40,6 @@ certs/*.p12
 
 # Maven
 **/target/
+
+# Variables locales / secretos Docker Compose
+.env

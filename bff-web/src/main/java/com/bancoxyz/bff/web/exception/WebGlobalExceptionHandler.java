@@ -30,4 +30,23 @@ public class WebGlobalExceptionHandler {
                 .status(HttpStatus.NOT_FOUND)
                 .body(error);
     }
+
+    @ExceptionHandler(WebCoreNoDisponibleException.class)
+    public ResponseEntity<WebApiErrorResponse> manejarCoreNoDisponible(
+            WebCoreNoDisponibleException ex,
+            HttpServletRequest request) {
+
+        WebApiErrorResponse error =
+                new WebApiErrorResponse(
+                        LocalDateTime.now(),
+                        HttpStatus.SERVICE_UNAVAILABLE.value(),
+                        "CORE_NO_DISPONIBLE",
+                        ex.getMessage(),
+                        request.getRequestURI()
+                );
+
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(error);
+    }
 }

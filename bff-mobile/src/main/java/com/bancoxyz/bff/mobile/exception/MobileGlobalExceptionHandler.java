@@ -30,4 +30,23 @@ public class MobileGlobalExceptionHandler {
                 .status(HttpStatus.NOT_FOUND)
                 .body(error);
     }
+
+    @ExceptionHandler(MobileCoreNoDisponibleException.class)
+    public ResponseEntity<MobileApiErrorResponse> manejarCoreNoDisponible(
+            MobileCoreNoDisponibleException ex,
+            HttpServletRequest request) {
+
+        MobileApiErrorResponse error =
+                new MobileApiErrorResponse(
+                        LocalDateTime.now(),
+                        HttpStatus.SERVICE_UNAVAILABLE.value(),
+                        "CORE_NO_DISPONIBLE",
+                        ex.getMessage(),
+                        request.getRequestURI()
+                );
+
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(error);
+    }
 }

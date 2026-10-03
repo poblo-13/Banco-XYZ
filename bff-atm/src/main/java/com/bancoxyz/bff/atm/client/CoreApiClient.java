@@ -14,6 +14,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
+import java.util.function.Supplier;
 
 @Component
 public class CoreApiClient {
@@ -39,12 +40,9 @@ public class CoreApiClient {
                 cuentaId
         );
 
-        return circuitBreakerFactory
-                .create("coreApi")
-                .run(
-                        () -> obtenerCuentaDesdeCore(cuentaId),
-                        this::manejarFalloCore
-                );
+        return ejecutarConCircuitBreaker(
+                () -> obtenerCuentaDesdeCore(cuentaId)
+        );
     }
 
     private CoreCuentaResponse obtenerCuentaDesdeCore(Long cuentaId) {
@@ -63,57 +61,6 @@ public class CoreApiClient {
         }
     }
 
-    private CoreCuentaResponse manejarFalloCore(Throwable throwable) {
-
-        AtmRecursoNoEncontradoException noEncontrado =
-                buscarCausa(
-                        throwable,
-                        AtmRecursoNoEncontradoException.class
-                );
-
-        if (noEncontrado != null) {
-            throw noEncontrado;
-        }
-
-        AtmSaldoInsuficienteException saldoInsuficiente =
-                buscarCausa(
-                        throwable,
-                        AtmSaldoInsuficienteException.class
-                );
-
-        if (saldoInsuficiente != null) {
-            throw saldoInsuficiente;
-        }
-
-        log.error(
-                "Circuit Breaker: Core API no disponible. Tipo de error: {}",
-                throwable.getClass().getName(),
-                throwable
-        );
-
-        throw new AtmCoreNoDisponibleException(
-                "El servicio central del banco no se encuentra disponible temporalmente"
-        );
-    }
-
-    private <T extends Throwable> T buscarCausa(
-            Throwable throwable,
-            Class<T> tipo) {
-
-        Throwable actual = throwable;
-
-        while (actual != null) {
-
-            if (tipo.isInstance(actual)) {
-                return tipo.cast(actual);
-            }
-
-            actual = actual.getCause();
-        }
-
-        return null;
-    }
-
     public CoreMovimientoResponse realizarRetiro(
             Long cuentaId,
             BigDecimal monto) {
@@ -122,6 +69,15 @@ public class CoreApiClient {
                 "ATM-BFF solicitando retiro para cuenta {}",
                 cuentaId
         );
+
+        return ejecutarConCircuitBreaker(
+                () -> realizarRetiroDesdeCore(cuentaId, monto)
+        );
+    }
+
+    private CoreMovimientoResponse realizarRetiroDesdeCore(
+            Long cuentaId,
+            BigDecimal monto) {
 
         CoreMovimientoRequest request =
                 new CoreMovimientoRequest(
@@ -150,5 +106,66 @@ public class CoreApiClient {
                     "Saldo insuficiente para realizar el retiro"
             );
         }
+    }
+
+    private <T> T ejecutarConCircuitBreaker(Supplier<T> operacion) {
+
+        return circuitBreakerFactory
+                .create("coreApi")
+                .run(
+                        operacion,
+                        this::manejarFalloCore
+                );
+    }
+
+    private <T> T manejarFalloCore(Throwable throwable) {
+
+        AtmRecursoNoEncontradoException noEncontrado =
+                buscarCausa(
+                        throwable,
+                        AtmRecursoNoEncontradoException.class
+                );
+
+        if (noEncontrado != null) {
+            throw noEncontrado;
+        }
+
+        AtmSaldoInsuficienteException saldoInsuficiente =
+                buscarCausa(
+                        throwable,
+                        AtmSaldoInsuficienteException.class
+                );
+
+        if (saldoInsuficiente != null) {
+            throw saldoInsuficiente;
+        }
+
+        log.error(
+                "Circuit Breaker ATM: Core API no disponible. Tipo de error: {}",
+                throwable.getClass().getName(),
+                throwable
+        );
+
+        throw new AtmCoreNoDisponibleException(
+                "El servicio central del banco no se encuentra disponible temporalmente"
+        );
+    }
+
+    private <T extends Throwable> T buscarCausa(
+            Throwable throwable,
+            Class<T> tipo) {
+
+        Throwable actual = throwable;
+
+        while (actual != null) {
+
+            if (tipo.isInstance(actual)) {
+                return tipo.cast(actual);
+            }
+
+            actual = actual.getCause();
+        }
+
+        return null;
     }
 }
