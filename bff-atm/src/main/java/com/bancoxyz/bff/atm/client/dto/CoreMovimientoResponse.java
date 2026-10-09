@@ -5,10 +5,13 @@ import java.time.LocalDate;
 
 public record CoreMovimientoResponse(
         Long id,
+        String operacionId,
         Long cuentaId,
         LocalDate fecha,
         String tipoMovimiento,
         BigDecimal monto,
-        String descripcion
+        String descripcion,
+        String estado,
+        BigDecimal saldoResultante
 ) {
 }

@@ -46,6 +46,9 @@
         <module>config-server</module>
         <module>discovery-server</module>
         <module>bank-core-api</module>
+        <module>account-service</module>
+        <module>customer-service</module>
+        <module>payment-service</module>
         <module>bff-web</module>
         <module>bff-mobile</module>
         <module>bff-atm</module>
@@ -54,4 +57,3 @@
 </modules>
 
 </project>
-

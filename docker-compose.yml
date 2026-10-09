@@ -77,12 +77,16 @@ services:
     build:
       context: .
       dockerfile: authorization-server/Dockerfile
-    image: banco-xyz-authorization-server:semana8
+    image: banco-xyz-authorization-server:semana9
     environment:
       AUTH_ISSUER: http://authorization-server:9000
       OAUTH_WEB_CLIENT_SECRET: ${OAUTH_WEB_CLIENT_SECRET}
       OAUTH_MOBILE_CLIENT_SECRET: ${OAUTH_MOBILE_CLIENT_SECRET}
       OAUTH_ATM_CLIENT_SECRET: ${OAUTH_ATM_CLIENT_SECRET}
+      OAUTH_BACKOFFICE_CLIENT_SECRET: ${OAUTH_BACKOFFICE_CLIENT_SECRET}
+      OAUTH_PAYMENT_CLIENT_SECRET: ${OAUTH_PAYMENT_CLIENT_SECRET}
+      OAUTH_OPERADOR_CLIENT_SECRET: ${OAUTH_OPERADOR_CLIENT_SECRET}
+      OAUTH_ATM_INTERNAL_CLIENT_SECRET: ${OAUTH_ATM_INTERNAL_CLIENT_SECRET}
     ports:
       - "9000:9000"
     networks:

@@ -1,18 +1,19 @@
 package com.bancoxyz.bff.atm.dto;
 
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
-
+import jakarta.validation.constraints.*;
 import java.math.BigDecimal;
+import java.util.UUID;
 
 public record AtmRetiroRequest(
+        @NotNull UUID operacionId,
 
-        @NotNull(message = "La cuenta es obligatoria")
-        @Positive(message = "La cuenta debe ser valida")
+        @NotNull
+        @Positive
         Long cuentaId,
 
-        @NotNull(message = "El monto es obligatorio")
-        @Positive(message = "El monto debe ser mayor que cero")
+        @NotNull
+        @DecimalMin("0.01")
+        @Digits(integer = 13, fraction = 2)
         BigDecimal monto
 ) {
 }

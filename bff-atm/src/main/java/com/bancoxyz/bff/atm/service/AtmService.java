@@ -2,18 +2,15 @@ package com.bancoxyz.bff.atm.service;
 
 import com.bancoxyz.bff.atm.client.CoreApiClient;
 import com.bancoxyz.bff.atm.client.dto.CoreCuentaResponse;
+import com.bancoxyz.bff.atm.client.dto.CoreMovimientoResponse;
 import com.bancoxyz.bff.atm.dto.AtmRetiroRequest;
 import com.bancoxyz.bff.atm.dto.AtmRetiroResponse;
 import com.bancoxyz.bff.atm.dto.AtmSaldoResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.bancoxyz.bff.atm.exception.AtmCoreNoDisponibleException;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AtmService {
-
-    private static final Logger log =
-            LoggerFactory.getLogger(AtmService.class);
 
     private final CoreApiClient coreApiClient;
 
@@ -22,11 +19,6 @@ public class AtmService {
     }
 
     public AtmSaldoResponse consultarSaldo(Long cuentaId) {
-
-        log.info(
-                "ATM-BFF preparando consulta de saldo para cuenta {}",
-                cuentaId
-        );
 
         CoreCuentaResponse cuenta =
                 coreApiClient.obtenerCuenta(cuentaId);
@@ -39,25 +31,25 @@ public class AtmService {
 
     public AtmRetiroResponse retirar(AtmRetiroRequest request) {
 
-        log.info(
-                "ATM-BFF procesando retiro para cuenta {}",
-                request.cuentaId()
-        );
-
-        coreApiClient.realizarRetiro(
-                request.cuentaId(),
-                request.monto()
-        );
-
-        CoreCuentaResponse cuentaActualizada =
-                coreApiClient.obtenerCuenta(
-                        request.cuentaId()
+        CoreMovimientoResponse movimiento =
+                coreApiClient.realizarRetiro(
+                        request.operacionId().toString(),
+                        request.cuentaId(),
+                        request.monto()
                 );
+
+        if (movimiento == null ||
+                !"CONFIRMADO".equals(movimiento.estado()) ||
+                movimiento.saldoResultante() == null) {
+            throw new AtmCoreNoDisponibleException(
+                    "No fue posible confirmar el retiro"
+            );
+        }
 
         return new AtmRetiroResponse(
                 request.cuentaId(),
                 request.monto(),
-                cuentaActualizada.saldoActual(),
+                movimiento.saldoResultante(),
                 "APROBADO"
         );
     }

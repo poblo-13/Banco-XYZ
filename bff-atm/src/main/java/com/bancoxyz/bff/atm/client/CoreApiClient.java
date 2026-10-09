@@ -6,10 +6,15 @@ import com.bancoxyz.bff.atm.client.dto.CoreMovimientoResponse;
 import com.bancoxyz.bff.atm.exception.AtmCoreNoDisponibleException;
 import com.bancoxyz.bff.atm.exception.AtmRecursoNoEncontradoException;
 import com.bancoxyz.bff.atm.exception.AtmSaldoInsuficienteException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
@@ -22,150 +27,117 @@ public class CoreApiClient {
     private static final Logger log =
             LoggerFactory.getLogger(CoreApiClient.class);
 
-    private final RestClient coreRestClient;
+    private final RestClient accountRestClient;
+    private final RestClient paymentRestClient;
     private final CircuitBreakerFactory<?, ?> circuitBreakerFactory;
 
     public CoreApiClient(
-            RestClient coreRestClient,
+            @Qualifier("accountRestClient") RestClient accountRestClient,
+            @Qualifier("paymentRestClient") RestClient paymentRestClient,
             CircuitBreakerFactory<?, ?> circuitBreakerFactory) {
 
-        this.coreRestClient = coreRestClient;
+        this.accountRestClient = accountRestClient;
+        this.paymentRestClient = paymentRestClient;
         this.circuitBreakerFactory = circuitBreakerFactory;
     }
 
     public CoreCuentaResponse obtenerCuenta(Long cuentaId) {
 
-        log.info(
-                "ATM-BFF consultando saldo de cuenta {} en Core API",
-                cuentaId
-        );
+        return ejecutarConCircuitBreaker(() -> {
+            try {
+                return accountRestClient.get()
+                        .uri("/api/cuentas/{cuentaId}", cuentaId)
+                        .retrieve()
+                        .body(CoreCuentaResponse.class);
 
-        return ejecutarConCircuitBreaker(
-                () -> obtenerCuentaDesdeCore(cuentaId)
-        );
-    }
-
-    private CoreCuentaResponse obtenerCuentaDesdeCore(Long cuentaId) {
-
-        try {
-            return coreRestClient.get()
-                    .uri("/api/core/cuentas/{cuentaId}", cuentaId)
-                    .retrieve()
-                    .body(CoreCuentaResponse.class);
-
-        } catch (HttpClientErrorException.NotFound ex) {
-
-            throw new AtmRecursoNoEncontradoException(
-                    "Cuenta no encontrada: " + cuentaId
-            );
-        }
+            } catch (HttpClientErrorException.NotFound ex) {
+                throw new AtmRecursoNoEncontradoException(
+                        "Cuenta no encontrada: " + cuentaId);
+            }
+        });
     }
 
     public CoreMovimientoResponse realizarRetiro(
+            String operacionId,
             Long cuentaId,
             BigDecimal monto) {
 
-        log.info(
-                "ATM-BFF solicitando retiro para cuenta {}",
-                cuentaId
-        );
+        return ejecutarConCircuitBreaker(() -> {
 
-        return ejecutarConCircuitBreaker(
-                () -> realizarRetiroDesdeCore(cuentaId, monto)
-        );
-    }
+            CoreMovimientoRequest request =
+                    new CoreMovimientoRequest(
+                            operacionId,
+                            cuentaId,
+                            "RETIRO",
+                            monto,
+                            "Retiro realizado desde ATM"
+                    );
 
-    private CoreMovimientoResponse realizarRetiroDesdeCore(
-            Long cuentaId,
-            BigDecimal monto) {
+            try {
+                return paymentRestClient.post()
+                        .uri("/api/pagos/movimientos")
+                        .body(request)
+                        .retrieve()
+                        .body(CoreMovimientoResponse.class);
 
-        CoreMovimientoRequest request =
-                new CoreMovimientoRequest(
-                        cuentaId,
-                        "retiro",
-                        monto,
-                        "Retiro realizado desde ATM"
-                );
+            } catch (HttpClientErrorException.NotFound ex) {
+                throw new AtmRecursoNoEncontradoException(
+                        "Cuenta no encontrada: " + cuentaId);
 
-        try {
-            return coreRestClient.post()
-                    .uri("/api/core/movimientos")
-                    .body(request)
-                    .retrieve()
-                    .body(CoreMovimientoResponse.class);
-
-        } catch (HttpClientErrorException.NotFound ex) {
-
-            throw new AtmRecursoNoEncontradoException(
-                    "Cuenta no encontrada: " + cuentaId
-            );
-
-        } catch (HttpClientErrorException.Conflict ex) {
-
-            throw new AtmSaldoInsuficienteException(
-                    "Saldo insuficiente para realizar el retiro"
-            );
-        }
+            } catch (HttpClientErrorException.Conflict ex) {
+                throw new AtmSaldoInsuficienteException(
+                        "Retiro rechazado: saldo insuficiente o conflicto de operacion");
+            }
+        });
     }
 
     private <T> T ejecutarConCircuitBreaker(Supplier<T> operacion) {
 
+        Authentication autenticacion =
+                SecurityContextHolder.getContext().getAuthentication();
+
         return circuitBreakerFactory
                 .create("coreApi")
-                .run(
-                        operacion,
-                        this::manejarFalloCore
-                );
+                .run(() -> {
+
+                    SecurityContext anterior =
+                            SecurityContextHolder.getContext();
+
+                    SecurityContext propagado =
+                            SecurityContextHolder.createEmptyContext();
+
+                    propagado.setAuthentication(autenticacion);
+
+                    try {
+                        SecurityContextHolder.setContext(propagado);
+                        return operacion.get();
+                    } finally {
+                        SecurityContextHolder.setContext(anterior);
+                    }
+
+                }, this::manejarFallo);
     }
 
-    private <T> T manejarFalloCore(Throwable throwable) {
-
-        AtmRecursoNoEncontradoException noEncontrado =
-                buscarCausa(
-                        throwable,
-                        AtmRecursoNoEncontradoException.class
-                );
-
-        if (noEncontrado != null) {
-            throw noEncontrado;
-        }
-
-        AtmSaldoInsuficienteException saldoInsuficiente =
-                buscarCausa(
-                        throwable,
-                        AtmSaldoInsuficienteException.class
-                );
-
-        if (saldoInsuficiente != null) {
-            throw saldoInsuficiente;
-        }
-
-        log.error(
-                "Circuit Breaker ATM: Core API no disponible. Tipo de error: {}",
-                throwable.getClass().getName(),
-                throwable
-        );
-
-        throw new AtmCoreNoDisponibleException(
-                "El servicio central del banco no se encuentra disponible temporalmente"
-        );
-    }
-
-    private <T extends Throwable> T buscarCausa(
-            Throwable throwable,
-            Class<T> tipo) {
+    private <T> T manejarFallo(Throwable throwable) {
 
         Throwable actual = throwable;
 
         while (actual != null) {
 
-            if (tipo.isInstance(actual)) {
-                return tipo.cast(actual);
+            if (actual instanceof AtmRecursoNoEncontradoException ex) {
+                throw ex;
+            }
+
+            if (actual instanceof AtmSaldoInsuficienteException ex) {
+                throw ex;
             }
 
             actual = actual.getCause();
         }
 
-        return null;
+        log.error("ATM: fallo de comunicacion entre microservicios", throwable);
+
+        throw new AtmCoreNoDisponibleException(
+                "Los servicios bancarios no estan disponibles temporalmente");
     }
 }
