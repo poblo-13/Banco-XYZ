@@ -1,840 +1,242 @@
-# Propuesta Técnica
-## Banco XYZ - Arquitectura de Microservicios, OAuth2, Resiliencia y Contenedores
-### Exp3 - Semana 8
+# Propuesta Técnica — Banco XYZ
+
+**Proyecto:** Arquitectura bancaria basada en microservicios y eventos\
+**Asignatura:** Desarrollo Backend III (PBY2203)\
+**Evaluación:** Experiencia 3 — Semana 9\
+**Rama:** [`semana9-pablo`](https://github.com/poblo-13/Banco-XYZ/tree/semana9-pablo)\
+**Versión de referencia:** commit `50953c8`, 10 de octubre de 2026
 
 ## 1. Introducción
 
-Durante esta semana se continúa trabajando sobre la arquitectura de Banco XYZ desarrollada anteriormente. La base del proyecto se mantiene: existe un Core API que concentra la lógica bancaria y tres BFF separados para los canales Web, Mobile y ATM.
+Banco XYZ evoluciona una arquitectura anterior basada en un núcleo bancario común hacia servicios con responsabilidades independientes. En **Semana 9**, los dominios principales quedan separados en **Cuentas, Clientes y Pagos**. La solución conserva tres Backend for Frontend (BFF) especializados, un servidor OAuth2, configuración centralizada y descubrimiento de servicios. Agrega tres destinos independientes de eventos Kafka y consolida el tratamiento de archivos heredados con Spring Batch.
 
-El cambio principal de esta etapa es que la solución deja de depender solamente de una ejecución manual de cada servicio y pasa a incorporar seguridad centralizada con OAuth2 y un despliegue completo mediante Docker Compose.
+El objetivo es demostrar una arquitectura más mantenible y trazable, con controles de seguridad, manejo de duplicados y recuperación frente a ciertos errores transitorios, dentro de un entorno académico reproducible.
 
-También se mantienen los componentes trabajados en la semana anterior, como Spring Cloud Config, Eureka, Resilience4j, Kafka y el servicio de auditoría.
+## 2. Problema y necesidades del negocio
 
-La idea es que todos estos componentes puedan funcionar juntos como una sola solución y que cada servicio conserve una responsabilidad clara.
+Se identifican tres necesidades que guían las decisiones implementadas:
 
----
+**Necesidad 1 — Separar responsabilidades y canales.** La concentración de cuentas, información de clientes y movimientos en un único servicio dificulta su evolución independiente. Los consumidores Web, Mobile y ATM también requieren interfaces y permisos distintos.
 
-## 2. Objetivo técnico
+**Necesidad 2 — Procesar operaciones y eventos sin acoplar todos los sistemas.** Después de una operación bancaria, distintos procesos —auditar, notificar y detectar riesgos— necesitan la información sin bloquear innecesariamente la respuesta transaccional y sin guardar duplicados.
 
-El objetivo de Semana 8 es dejar la arquitectura de Banco XYZ preparada para ejecutarse como un ecosistema de microservicios completo.
+**Necesidad 3 — Incorporar datos legados con validación y tolerancia a fallos.** Los archivos históricos deben procesarse en lotes, detectar datos inválidos, mantener trazabilidad y recuperarse ante errores de acceso transitorios sin perder registros.
 
-Para esto se busca:
+## 3. Objetivos técnicos
 
-- centralizar la emisión de tokens mediante OAuth2;
-- mantener permisos separados para Web, Mobile y ATM;
-- proteger los BFF como Resource Server;
-- mantener un Core API único para la lógica bancaria;
-- aplicar tolerancia a fallos en la comunicación entre los BFF y el Core;
-- mantener la mensajería de movimientos mediante Kafka;
-- ejecutar más de una instancia del consumidor de auditoría;
-- dockerizar los microservicios;
-- levantar todos los componentes mediante Docker Compose;
-- evitar incluir claves o contraseñas directamente en el repositorio.
+- Establecer servicios de dominio independientes para **Cuentas**, **Clientes** y **Pagos**.
+- Conservar interfaces BFF específicas para Web, Mobile y ATM, protegidas mediante scopes OAuth2.
+- Centralizar información de configuración y registro de servicios mediante Config Server y Eureka.
+- Aislar fallos de comunicación mediante mecanismos de resiliencia en los BFF.
+- Publicar movimientos confirmados utilizando **Transactional Outbox**.
+- Distribuir eventos Kafka a **Auditoría**, **Notificaciones** y **Riesgo** mediante grupos consumidores independientes.
+- Persistir el procesamiento con controles de duplicados e identificar movimientos de riesgo mediante reglas simples.
+- Ejecutar tres migraciones Spring Batch, con validación, paralelismo y reintentos.
+- Documentar resultados, limitaciones y procedimientos de ejecución local con Docker Compose.
 
----
+## 4. Arquitectura por capas
 
-## 3. Arquitectura propuesta
+| Capa | Componentes | Función |
+|---|---|---|
+| Entrada | `bff-web`, `bff-mobile`, `bff-atm` | APIs adaptadas a cada cliente |
+| Identidad técnica | `authorization-server` | Tokens OAuth2 con scopes y flujo `client_credentials` |
+| Negocio | `account-service`, `customer-service`, `payment-service` | Cuentas, clientes, movimientos |
+| Plataforma | `config-server`, `discovery-server` | Configuración y registro |
+| Eventos | Kafka (`banco.movimientos`) | Comunicación asíncrona |
+| Procesamiento | `audit-service`, `notification-service`, `risk-service` | Tres usos independientes de los eventos |
+| Migraciones | `batch-migration` | Ingesta y validación de archivos CSV |
+| Persistencia | MySQL 8 | Bases de datos lógicas separadas |
+| Operación | Docker Compose, Maven | Arranque local y compilación |
 
-La solución queda formada por los siguientes módulos:
+El archivo Maven raíz reúne **14 módulos**, incluyendo `bank-core-api` como **servicio legado**. Este último está bajo el perfil Docker Compose `legacy` y no representa el flujo principal por defecto.
 
-```text
-authorization-server
-config-server
-discovery-server
-bank-core-api
-bff-web
-bff-mobile
-bff-atm
-audit-service
-```
+El detalle gráfico está en [`DIAGRAMA_ARQUITECTURA.md`](DIAGRAMA_ARQUITECTURA.md).
 
-Además se utilizan:
+## 5. Separación de los dominios bancarios
 
-```text
-MySQL
-Apache Kafka
-Docker
-Docker Compose
-```
+### 5.1 Cuentas (`account-service`)
 
-El flujo general es el siguiente:
+Administración de cuentas, consulta de saldos y aplicación de operaciones por identificador. Expone el puerto `8084` y utiliza `banco_xyz_cuentas`. La idempotencia de operaciones ayuda a controlar reintentos y respuestas repetidas.
 
-```text
-                  Authorization Server
-                         :9000
-                           |
-            +--------------+--------------+
-            |              |              |
-            v              v              v
-         BFF Web       BFF Mobile      BFF ATM
-          :8081          :8082          :8083
-            \              |              /
-             \             |             /
-              +------- Resilience4j -----+
-                           |
-                           v
-                    Bank Core API
-                        :8080
-                       /     \
-                      /       \
-                  MySQL       Kafka
-                               |
-                               v
-                      banco.movimientos
-                               |
-                    +----------+----------+
-                    |                     |
-                    v                     v
-             Audit Service 1       Audit Service 2
-```
+### 5.2 Clientes (`customer-service`)
 
-Como servicios de apoyo también se mantienen:
+Gestión y consulta de datos de clientes. Expone el puerto `8085` y utiliza `banco_xyz_clientes`. La separación evita mezclar datos personales con la lógica de movimientos y saldos.
 
-```text
-Config Server -> 8888
-Eureka        -> 8761
-```
+### 5.3 Pagos (`payment-service`)
 
----
+Registra movimientos y mantiene sus estados operacionales. Expone el puerto `8086` y utiliza `banco_xyz_pagos`. Procesa operaciones de tipo `DEPOSITO` y `RETIRO` en la implementación nueva, y se coordina con `account-service` mediante llamadas internas autorizadas.
 
-## 4. Backend for Frontend
+El servicio usa un **`operacionId` UUID** como identificador de operación. Cuando la confirmación en Cuentas no puede determinarse, la operación puede permanecer pendiente para evitar asumir que el saldo fue modificado o revertido sin evidencia.
 
-La arquitectura mantiene tres BFF porque cada canal necesita exponer operaciones diferentes.
+## 6. Backend for Frontend
 
-### BFF Web
+Se conservan tres interfaces especializadas:
 
-El canal Web entrega una vista más completa de la información bancaria.
+| BFF | Puerto host | Operaciones principales | Scope |
+|---|---:|---|---|
+| Web | **8181** | Listar cuentas, detalle, movimientos y dashboard | `WEB_ACCESS` |
+| Mobile | 8082 | Cuenta, movimientos recientes y resumen | `MOBILE_ACCESS` |
+| ATM | 8083 | Consultar saldo y efectuar retiro | `ATM_ACCESS` |
 
-Entre sus operaciones se encuentran:
+Los BFF utilizan los servicios de dominio según la operación solicitada; el puerto Web `8181` corresponde al mapeo `8181:8081` de Docker Compose. Las consultas descendentes cuentan con respuestas de error controladas y mecanismos de resiliencia. La API del cliente no queda acoplada directamente a las tablas de MySQL.
+
+## 7. Autorización OAuth2
+
+`authorization-server` emite tokens mediante `client_credentials`. Cada BFF exige el scope correspondiente al canal. La versión Semana 9 incorpora además los siguientes clientes técnicos:
+
+| Cliente | Scopes configurados | Propósito |
+|---|---|---|
+| `banco-web` | `WEB_ACCESS` | Acceso al BFF Web |
+| `banco-mobile` | `MOBILE_ACCESS` | Acceso al BFF Mobile |
+| `banco-atm` | `ATM_ACCESS` | Acceso al BFF ATM |
+| `banco-backoffice` | `CLIENTES_WRITE` | Administración autorizada de clientes |
+| `banco-payment` | `CUENTAS_OPERAR` | Operaciones internas sobre cuentas |
+| `banco-operador` | `PAGOS_WRITE`, `PAGOS_READ` | Acceso técnico al servicio de pagos |
+| `banco-atm-interno` | `PAGOS_WRITE` | Llamadas internas desde ATM |
+
+Las contraseñas de clientes y de MySQL se configuran mediante variables de entorno, nunca mediante valores reales añadidos a Git. `client_credentials` **no equivale** a autenticación individual de clientes bancarios; ese aspecto requeriría un mecanismo de identidad adicional para un sistema productivo.
+
+## 8. Manejo de movimientos: estados e idempotencia
+
+`payment-service` registra o identifica una solicitud por `operacionId`, valida su contenido, solicita a `account-service` el efecto sobre el saldo y registra el resultado. Los estados principales en código son `PENDIENTE`, `CONFIRMADO` y `RECHAZADO`.
+
+El mismo identificador con parámetros distintos se rechaza. La confirmación duplicada de una operación ya completada recupera su resultado, en lugar de aplicar una segunda vez la misma operación. Errores funcionales como cuenta inexistente o saldo insuficiente se distinguen de fallos de comunicación de infraestructura.
+
+**Límite de diseño:** las bases de Cuentas y Pagos no comparten una única transacción ACID distribuida; el diseño depende de identificadores, estados y manejo de reintentos para tratar resultados inciertos.
+
+## 9. Patrón Transactional Outbox
+
+Durante la confirmación local, Pagos guarda el movimiento confirmado **y** una entrada pendiente en `eventos_movimiento_outbox` en la misma transacción de base de datos. Un proceso `@Scheduled` consulta lotes de hasta diez eventos pendientes, los envía a Kafka y los marca publicados después de recibir confirmación.
 
 ```text
-GET /api/web/cuentas
-GET /api/web/cuentas/{cuentaId}
-GET /api/web/cuentas/{cuentaId}/movimientos
-GET /api/web/dashboard/{cuentaId}
+payment-service
+    -> MySQL Pagos: movimiento CONFIRMADO + Outbox PENDIENTE
+    -> publicador programado: lee Outbox
+    -> Kafka: tópico banco.movimientos
+    -> MySQL Pagos: Outbox PUBLICADO
 ```
 
-Su scope es:
+En el código, el envío usa **`operacionId` como key Kafka**. Los mensajes de Semana 9 declaran `evento = MOVIMIENTO_CONFIRMADO`. No deben confundirse con los eventos del `bank-core-api` anterior, que utilizaba otro contrato y otro mecanismo de publicación.
+
+El patrón disminuye el riesgo de perder eventos después de confirmar una transacción local, aunque una entrega puede repetirse; por eso la idempotencia de los consumidores sigue siendo indispensable.
+
+## 10. Auditoría, Notificaciones y Riesgo
+
+Los tres servicios se suscriben al mismo tópico `banco.movimientos`, pero usan grupos consumidores diferentes:
+
+| Servicio | Grupo Kafka | Base de datos | Función |
+|---|---|---|---|
+| `audit-service` | `banco-auditoria` | `banco_xyz_auditoria` | Registrar eventos y metadatos del consumo |
+| `notification-service` | `banco-notificaciones` | `banco_xyz_notificaciones` | Persistir notificaciones |
+| `risk-service` | `banco-riesgo` | `banco_xyz_riesgo` | Persistir evaluaciones de riesgo |
+
+Los consumidores validan los eventos y utilizan restricciones e identificadores para no duplicar entradas persistidas. También contrastan el contenido para detectar la reutilización indebida de un ID con otro payload.
+
+En Riesgo, la lógica implementada etiqueta como `ALERTA` un retiro con monto **mayor o igual a 10.000**; es una regla académica simple y no un motor de detección de fraude real.
+
+### Prueba de escalamiento
+
+La evidencia [`docs/EVIDENCIA-KAFKA-SEMANA9.md`](docs/EVIDENCIA-KAFKA-SEMANA9.md) consigna **24 eventos simulados**, procesados por los tres grupos: 24 registros de auditoría, 24 notificaciones y 24 de riesgo (**72 persistencias**). Durante la prueba se ejecutaron **dos instancias por consumidor** (seis instancias); los contadores individuales reflejan el reparto de particiones. El archivo Compose por defecto tiene **dos instancias de auditoría**, pero solo **una de notificaciones** y **una de riesgo**, que fueron escaladas para esa prueba.
+
+Los resultados verifican distribución funcional, no rendimiento bajo carga ni recuperación automática de fallas de brokers.
+
+## 11. Spring Batch para datos legados
+
+`batch-migration` implementa tres jobs:
+
+1. `movimientosJob` — movimientos financieros diarios.
+2. `interesesJob` — intereses trimestrales.
+3. `estadosJob` — estados financieros anuales.
+
+Cada job lee archivos de tres carpetas (`semana_1`, `semana_2`, `semana_3`), procesa registros por chunks y utiliza flujos paralelos con límite de tres tareas simultáneas. Los errores de validación se registran con el valor original, estado `RECHAZADO` y motivo; la escritura por `(semana, linea)` permite repetir la ingesta sin duplicar esa clave.
+
+El código configura reintentos para excepciones transitorias de acceso a datos. Las validaciones previas de ejecución registraron **3.054 registros procesados sin pérdidas** entre las tres migraciones.
+
+## 12. Pruebas de recuperación controlada
+
+La prueba `ReintentosBatchIntegrationTest.java` utiliza una **base H2 temporal** y un `DataSource` instrumentado que provoca un fallo transitorio en la primera escritura de cada job. Se ejecutan tres casos separados con archivos sintéticos; cada job debe recuperarse y almacenar tres filas correspondientes a las tres semanas.
+
+La última ejecución informada finalizó con:
 
 ```text
-WEB_ACCESS
-```
-
-### BFF Mobile
-
-El canal Mobile entrega información más resumida y enfocada en consultas rápidas.
-
-Entre sus operaciones se encuentran:
-
-```text
-GET /api/mobile/cuentas/{cuentaId}
-GET /api/mobile/cuentas/{cuentaId}/movimientos-recientes
-GET /api/mobile/resumen/{cuentaId}
-```
-
-Su scope es:
-
-```text
-MOBILE_ACCESS
-```
-
-### BFF ATM
-
-El canal ATM se mantiene limitado a las operaciones propias de un cajero automático.
-
-```text
-GET  /api/atm/saldo/{cuentaId}
-POST /api/atm/retiros
-```
-
-Su scope es:
-
-```text
-ATM_ACCESS
-```
-
-La separación de los BFF evita entregar la misma interfaz a todos los clientes y permite controlar de forma independiente qué puede realizar cada canal.
-
-Los BFF no acceden directamente a MySQL. Toda operación bancaria pasa por `bank-core-api`.
-
----
-
-## 5. Authorization Server
-
-En Semana 8 se incorpora el módulo:
-
-```text
-authorization-server
-```
-
-Su función es centralizar la emisión de tokens OAuth2.
-
-El servicio funciona en:
-
-```text
-http://localhost:9000
-```
-
-Se configuraron tres clientes:
-
-```text
-banco-web
-banco-mobile
-banco-atm
-```
-
-Cada uno tiene acceso solamente al scope que corresponde a su canal:
-
-```text
-banco-web    -> WEB_ACCESS
-banco-mobile -> MOBILE_ACCESS
-banco-atm    -> ATM_ACCESS
-```
-
-El flujo utilizado es:
-
-```text
-client_credentials
-```
-
-Este flujo fue elegido porque en esta implementación se valida el acceso de los clientes o servicios al backend. No corresponde a un inicio de sesión de una persona.
-
-El endpoint utilizado para solicitar tokens es:
-
-```text
-POST /oauth2/token
-```
-
----
-
-## 6. Seguridad de los BFF
-
-Los tres BFF se configuran como OAuth2 Resource Server.
-
-Esto significa que ya no generan sus propios JWT. En su lugar, reciben un token emitido por `authorization-server`, validan su firma y revisan los scopes incluidos.
-
-Las reglas principales son:
-
-```text
-/api/web/**     -> SCOPE_WEB_ACCESS
-/api/mobile/**  -> SCOPE_MOBILE_ACCESS
-/api/atm/**     -> SCOPE_ATM_ACCESS
-```
-
-Durante las pruebas se comprobó el siguiente comportamiento:
-
-```text
-Sin token                 -> 401 Unauthorized
-Token con scope correcto  -> acceso permitido
-Token de otro canal       -> 403 Forbidden
-```
-
-Con este cambio se eliminó la generación local de JWT que existía anteriormente en cada BFF.
-
----
-
-## 7. Manejo de secretos
-
-Las credenciales utilizadas por OAuth2 y MySQL no se dejan escritas directamente en el código ni se suben a Git.
-
-El proyecto utiliza un archivo local:
-
-```text
-.env
-```
-
-Este archivo está excluido mediante `.gitignore`.
-
-Como referencia se incluye:
-
-```text
-.env.example
-```
-
-Las variables principales son:
-
-```text
-MYSQL_ROOT_PASSWORD
-OAUTH_WEB_CLIENT_SECRET
-OAUTH_MOBILE_CLIENT_SECRET
-OAUTH_ATM_CLIENT_SECRET
-```
-
-También se verificó antes de preparar la entrega que `.env` y los certificados PKCS12 no estuvieran siendo rastreados por Git.
-
----
-
-## 8. Core API
-
-El módulo `bank-core-api` continúa siendo el servicio central de negocio.
-
-Entre sus responsabilidades se encuentran:
-
-- consultar cuentas;
-- consultar movimientos;
-- registrar depósitos;
-- registrar retiros;
-- registrar compras;
-- validar saldo disponible;
-- actualizar saldos;
-- persistir operaciones;
-- publicar eventos de movimientos.
-
-La persistencia se realiza en MySQL mediante Spring Data JPA.
-
-Base de datos:
-
-```text
-banco_xyz_core
-```
-
-Tablas principales:
-
-```text
-cuentas
-movimientos
-```
-
----
-
-## 9. Configuración centralizada
-
-Se mantiene `config-server` mediante Spring Cloud Config.
-
-Puerto:
-
-```text
-8888
-```
-
-El Core API obtiene parte de su configuración desde:
-
-```text
-config-repo/bank-core-api.properties
-```
-
-Desde este repositorio se definen propiedades relacionadas con Eureka, Kafka y observabilidad.
-
-En Docker, el repositorio de configuración se monta dentro del contenedor para que `config-server` pueda leerlo sin depender de una ruta local de Windows.
-
----
-
-## 10. Service Discovery
-
-El proyecto mantiene `discovery-server` utilizando Netflix Eureka.
-
-Puerto:
-
-```text
-8761
-```
-
-El `bank-core-api` se registra como:
-
-```text
-BANK-CORE-API
-```
-
-Durante la prueba final se comprobó un registro exitoso:
-
-```text
-registration status: 204
-```
-
-También se validó el estado `UP` desde Eureka.
-
----
-
-## 11. Resilience4j
-
-En la versión anterior la principal prueba de tolerancia a fallos estaba concentrada en ATM. Para Semana 8 la protección mediante Resilience4j se extiende a los tres BFF.
-
-El Circuit Breaker utilizado se llama:
-
-```text
-coreApi
-```
-
-Configuración principal:
-
-```text
-sliding-window-type: COUNT_BASED
-sliding-window-size: 3
-minimum-number-of-calls: 3
-failure-rate-threshold: 50
-wait-duration-in-open-state: 10s
-permitted-number-of-calls-in-half-open-state: 1
-automatic-transition-from-open-to-half-open-enabled: true
-```
-
-Cuando el Core no se encuentra disponible, los BFF responden de manera controlada en vez de dejar que la excepción de comunicación llegue directamente al cliente.
-
-Respuesta esperada:
-
-```text
-HTTP 503 Service Unavailable
-CORE_NO_DISPONIBLE
-```
-
-Durante las pruebas se verificó el ciclo:
-
-```text
-CLOSED
-   |
-   v
-OPEN
-   |
-   v
-HALF_OPEN
-   |
-   v
-CLOSED
-```
-
-También se mantienen fuera del conteo del Circuit Breaker algunos errores propios del negocio, por ejemplo una cuenta inexistente o saldo insuficiente. Esos casos no representan una caída del Core.
-
----
-
-## 12. Kafka y arquitectura orientada a eventos
-
-Apache Kafka se mantiene como broker para los eventos generados después de una operación bancaria.
-
-Tópico:
-
-```text
-banco.movimientos
-```
-
-Configuración:
-
-```text
-3 particiones
-replication-factor = 1
-```
-
-Los eventos utilizados son:
-
-```text
-DEPOSITO_REALIZADO
-RETIRO_REALIZADO
-COMPRA_REALIZADA
-```
-
-El contrato `MovimientoEvento` contiene información como:
-
-```text
-tipoEvento
-movimientoId
-cuentaId
-tipoMovimiento
-monto
-saldoResultante
-fechaMovimiento
-fechaEvento
-```
-
-La key utilizada es:
-
-```text
-cuentaId
-```
-
-De esta forma, los eventos de una misma cuenta son enviados a una misma partición y mantienen su orden relativo.
-
----
-
-## 13. Publicación después del COMMIT
-
-Los eventos no se envían a Kafka antes de confirmar la operación bancaria.
-
-El Core utiliza:
-
-```text
-@TransactionalEventListener(
-    phase = TransactionPhase.AFTER_COMMIT
-)
-```
-
-El flujo es:
-
-```text
-Operación bancaria
-      |
-      v
-Validación
-      |
-      v
-Persistencia en MySQL
-      |
-      v
-COMMIT
-      |
-      v
-Evento interno
-      |
-      v
-Kafka
-```
-
-Esto evita publicar un movimiento que finalmente no haya quedado guardado en la base de datos.
-
----
-
-## 14. Audit Service
-
-El módulo `audit-service` consume los eventos generados por el Core.
-
-Tópico:
-
-```text
-banco.movimientos
-```
-
-Grupo:
-
-```text
-banco-auditoria
-```
-
-Para Semana 8 se levantan dos instancias:
-
-```text
-audit-service-1
-audit-service-2
-```
-
-Ambas pertenecen al mismo Consumer Group.
-
-Durante las pruebas Kafka repartió las particiones entre las dos instancias, por lo que no ambas procesan el mismo evento dentro del mismo grupo.
-
-Esto permite demostrar escalabilidad horizontal del consumidor.
-
----
-
-## 15. Prueba funcional del flujo de eventos
-
-Se realizó un retiro mediante el BFF ATM utilizando la cuenta `101`.
-
-Datos de la prueba:
-
-```text
-Saldo inicial:     100000.00
-Monto retirado:     10000.00
-Saldo resultante:   90000.00
-Estado:             APROBADO
-```
-
-Respuesta obtenida:
-
-```json
-{
-  "cuentaId": 101,
-  "montoRetirado": 10000,
-  "saldoDisponible": 90000.00,
-  "estado": "APROBADO"
-}
-```
-
-Después de la operación se comprobó el saldo desde el Core y se observó el evento `RETIRO_REALIZADO` en Kafka.
-
-El evento fue consumido por una de las instancias de `audit-service`.
-
----
-
-## 16. Dockerización
-
-Todos los microservicios principales cuentan con un `Dockerfile`.
-
-Se generaron imágenes para:
-
-```text
-authorization-server
-config-server
-discovery-server
-bank-core-api
-bff-web
-bff-mobile
-bff-atm
-audit-service
-```
-
-Los Dockerfile utilizan una construcción multi-stage. La primera etapa utiliza Maven para compilar el módulo correspondiente y la segunda etapa utiliza una imagen Java para ejecutar el JAR generado.
-
----
-
-## 17. Docker Compose
-
-El archivo principal de despliegue es:
-
-```text
-docker-compose.yml
-```
-
-Este archivo levanta:
-
-```text
-mysql
-kafka
-config-server
-discovery-server
-authorization-server
-bank-core-api
-bff-web
-bff-mobile
-bff-atm
-audit-service-1
-audit-service-2
-```
-
-En total se ejecutan once contenedores dentro del mismo ecosistema.
-
-Los servicios se comunican utilizando los nombres definidos por Docker Compose. De esta forma no dependen de `localhost` para comunicarse entre contenedores.
-
----
-
-## 18. Orden de arranque y healthchecks
-
-Durante las primeras pruebas se detectó que `bank-core-api` podía intentar conectarse a MySQL antes de que la base estuviera lista.
-
-Para corregir esto se agregaron `healthcheck` a:
-
-```text
-mysql
-kafka
-```
-
-El Core espera que ambos servicios estén saludables antes de iniciar.
-
-En la prueba final se obtuvo:
-
-```text
-mysql -> healthy
-kafka -> healthy
-```
-
-y luego el Core inició correctamente.
-
-En los logs se comprobó:
-
-```text
-HikariPool-1 - Start completed.
-Started BankCoreApiApplication
-registration status: 204
-```
-
-Después de aplicar este cambio no volvió a aparecer el error de detección de dialecto que se había producido durante el primer arranque.
-
----
-
-## 19. HTTPS
-
-Para la ejecución local se mantiene la posibilidad de utilizar HTTPS en los BFF mediante un certificado PKCS12.
-
-El certificado local se encuentra fuera de Git:
-
-```text
-certs/banco-xyz-local.p12
-```
-
-La configuración utiliza variables como:
-
-```text
-SSL_ENABLED
-SSL_KEYSTORE_PATH
-SSL_KEYSTORE_PASSWORD
-```
-
-En Docker Compose los BFF utilizan HTTP dentro de la red interna:
-
-```text
-SSL_ENABLED=false
-```
-
-La autorización de los endpoints continúa protegida mediante OAuth2 y JWT.
-
----
-
-## 20. Manejo de errores
-
-La solución mantiene respuestas controladas para errores funcionales y de infraestructura.
-
-Entre los códigos utilizados se encuentran:
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-409 Conflict
-503 Service Unavailable
-```
-
-Ejemplos de errores propios del sistema:
-
-```text
-SALDO_INSUFICIENTE
-CORE_NO_DISPONIBLE
-```
-
-Como mejora futura todavía se puede avanzar hacia una estructura de error común para todos los módulos.
-
----
-
-## 21. Compilación y validación final
-
-Se ejecutó desde la raíz:
-
-```powershell
-mvn clean verify
-```
-
-El resultado fue:
-
-```text
-Banco XYZ - Exp3 Semana 8 ................. SUCCESS
-Banco XYZ - Config Server ................. SUCCESS
-Banco XYZ - Discovery Server .............. SUCCESS
-Banco XYZ - Core API ...................... SUCCESS
-Banco XYZ - BFF Web ....................... SUCCESS
-Banco XYZ - BFF Mobile .................... SUCCESS
-Banco XYZ - BFF ATM ....................... SUCCESS
-Banco XYZ - Audit Service ................. SUCCESS
-Banco XYZ - Authorization Server .......... SUCCESS
-
+17 pruebas ejecutadas
+17 correctas
+0 fallos / 0 errores
 BUILD SUCCESS
 ```
 
-Esto valida la compilación integrada de los nueve elementos del reactor Maven.
+Esto respalda la recuperación **ante errores simulados**, pero no valida una desconexión real de MySQL en producción.
 
-También se comprobó el funcionamiento del ecosistema con:
+## 13. Configuración y despliegue local
+
+La solución está preparada para ejecución con **Java 21**, Maven, Docker y Docker Compose. Se utiliza un solo contenedor MySQL con varias bases de datos lógicas y un broker Kafka con tres particiones. Config Server centraliza propiedades de componentes configurados, y Eureka permite publicar servicios registrados.
+
+Comandos de referencia desde la raíz del proyecto:
 
 ```powershell
+# Crear el archivo de variables y asignar secretos locales propios
+Copy-Item .env.example .env
+
+# Validar el archivo de orquestación
+# (evitar mostrar o compartir salidas que expongan secretos)
+docker compose config --quiet
+
+# Compilar y ejecutar pruebas
+mvn clean verify
+
+# Levantar el entorno habitual sin el Core legado
+docker compose up -d --build
+
+# Revisar servicios
 docker compose ps
 ```
 
-MySQL y Kafka aparecieron en estado `healthy` y el resto de los servicios permaneció en ejecución.
+**Precaución:** los comandos son un procedimiento de reproducción, no una declaración de que se hayan vuelto a ejecutar durante la redacción. `docker compose down -v` elimina volúmenes persistentes y puede borrar datos de pruebas; no se recomienda usarlo como rutina.
 
----
+## 14. Decisiones técnicas y justificación
 
-## 22. Decisiones técnicas
+| Decisión | Justificación | Limitación |
+|---|---|---|
+| Dividir Cuentas, Clientes y Pagos | Responsabilidades separadas y evolución independiente | Introduce comunicación y consistencia entre servicios |
+| Mantener tres BFF | Contratos ajustados a Web, Mobile y ATM | Más servicios que configurar y mantener |
+| OAuth2 por scopes | Permisos explícitos para clientes técnicos | No representa identidad de clientes finales |
+| Transactional Outbox | Registrar eventos pendientes junto con la operación local | No ofrece entrega exactamente una vez extremo a extremo |
+| Tres grupos Kafka | Auditar, notificar y evaluar riesgos sin depender unos de otros | Un solo broker no da alta disponibilidad |
+| Idempotencia y hash de payload | Tolerar duplicados y detectar discrepancias | Requiere persistencia y reglas de negocio coherentes |
+| Spring Batch y validación | Migrar datos heredados con trazabilidad | Las fuentes heredadas pueden requerir limpieza posterior |
+| Pruebas H2 con error inyectado | Repetibilidad sin tocar MySQL real | No sustituyen pruebas reales de infraestructura |
+| Docker Compose | Facilitar ejecución académica reproducible | No representa por sí mismo un despliegue productivo |
 
-### OAuth2 centralizado
+## 15. Resultados acreditados y pendientes
 
-Se prefirió un Authorization Server independiente en vez de mantener generación de JWT en cada BFF. Esto deja la emisión de tokens en un único lugar y permite que cada BFF se concentre en validar el token y aplicar sus permisos.
+### Resultados documentados
 
-### Scopes separados
+- Arquitectura de **14 módulos Maven** presente en la rama Semana 9.
+- Prueba Kafka con **24 eventos simulados por grupo** y **72 registros** en total.
+- Participación de **seis instancias** en el ejercicio de consumo distribuido.
+- Regla de alerta de riesgo demostrada para un retiro simulado de **15.000**.
+- Migración de **3.054 registros** de las tres fuentes heredadas, según la validación anterior.
+- **17 pruebas Spring Batch** exitosas, incluidas tres de recuperación ante fallo transitorio simulado.
+- Cambios de test publicados en el commit `50953c8`.
 
-Se mantienen:
+### Pendientes o fuera del alcance probado
 
-```text
-WEB_ACCESS
-MOBILE_ACCESS
-ATM_ACCESS
-```
+- Pruebas de resiliencia ante caída real de MySQL, Kafka o de una réplica.
+- Ensayos de carga, throughput y latencia con métricas reproducibles.
+- Kafka con múltiples brokers y configuración de transporte autenticado/cifrado.
+- Autenticación de usuarios bancarios finales y gestión productiva de secretos.
+- Despliegue efectivo en AWS: **no demostrado por la evidencia consultada**.
+- Validación formal de un video o capturas específicas: depende de los requisitos de entrega de la asignatura.
 
-porque los tres canales no ofrecen las mismas operaciones.
+## 16. Documentación complementaria
 
-### Resilience4j en los tres BFF
+- [`README.md`](README.md): visión general e instrucciones iniciales.
+- [`DIAGRAMA_ARQUITECTURA.md`](DIAGRAMA_ARQUITECTURA.md): vistas Mermaid y responsabilidades.
+- [`EVIDENCIA_EJECUCION.md`](EVIDENCIA_EJECUCION.md): resultados y trazabilidad.
+- [`docs/EVIDENCIA-KAFKA-SEMANA9.md`](docs/EVIDENCIA-KAFKA-SEMANA9.md): mediciones de Kafka en la prueba documentada.
+- [`docker-compose.yml`](docker-compose.yml): servicios, puertos y redes.
+- [`batch-migration/src/test/java/com/bancoxyz/batch/ReintentosBatchIntegrationTest.java`](batch-migration/src/test/java/com/bancoxyz/batch/ReintentosBatchIntegrationTest.java): prueba de recuperación controlada.
 
-La dependencia hacia el Core existe en los tres canales. Por este motivo se decidió aplicar tolerancia a fallos en Web, Mobile y ATM.
+## 17. Conclusión
 
-### Kafka
-
-Kafka se mantiene porque permite desacoplar el procesamiento de eventos y demostrar distribución mediante particiones y Consumer Groups.
-
-### `cuentaId` como key
-
-La cuenta se utiliza como clave para conservar el orden relativo de sus movimientos dentro de una partición.
-
-### AFTER_COMMIT
-
-Se mantiene esta estrategia para no publicar un evento antes de confirmar la operación en MySQL.
-
-### Docker Compose
-
-Se utiliza Docker Compose para evitar iniciar manualmente cada componente y para dejar definida en un solo archivo la infraestructura necesaria para ejecutar el proyecto.
-
----
-
-## 23. Limitaciones actuales
-
-La implementación corresponde a un entorno académico y local.
-
-Kafka utiliza:
-
-```text
-1 broker
-replication-factor = 1
-```
-
-por lo que no representa una configuración de alta disponibilidad.
-
-El flujo OAuth2 utilizado es `client_credentials`. Esto permite demostrar autenticación entre clientes y servicios, pero no representa autenticación de usuarios bancarios finales.
-
-El `audit-service` procesa los eventos y los registra en logs. Actualmente no mantiene una base de datos de auditoría propia.
-
-MySQL y Kafka utilizan volúmenes Docker para conservar datos entre reinicios, pero al ejecutar:
-
-```powershell
-docker compose down -v
-```
-
-estos volúmenes se eliminan.
-
----
-
-## 24. Mejoras futuras
-
-A partir de esta versión se podrían incorporar las siguientes mejoras:
-
-- agregar autenticación de usuarios finales además de `client_credentials`;
-- propagar identidad hacia el Core para mejorar la trazabilidad;
-- estandarizar completamente los DTO de error;
-- incorporar Bean Validation en todos los contratos de entrada;
-- agregar idempotencia en los consumidores Kafka;
-- implementar un Dead Letter Topic para eventos que no puedan procesarse;
-- persistir las auditorías en una base de datos propia;
-- agregar métricas y dashboards de observabilidad;
-- desplegar Kafka con más de un broker para alta disponibilidad;
-- utilizar un API Gateway o proxy reverso para centralizar HTTPS en un ambiente productivo.
-
----
-
-## 25. Tecnologías utilizadas
-
-- Java 21;
-- Spring Boot 4.0.7;
-- Spring Cloud 2025.1.2;
-- Spring Cloud Config;
-- Netflix Eureka;
-- Spring Security;
-- Spring Authorization Server;
-- OAuth2;
-- JWT;
-- Resilience4j;
-- Spring Data JPA;
-- Hibernate;
-- MySQL 8;
-- Apache Kafka 4.3.1;
-- Spring Kafka;
-- Docker;
-- Docker Compose;
-- Maven;
-- HTTPS / TLS;
-- Spring Boot Actuator;
-- Git;
-- GitHub.
-
-Durante las pruebas finales se utilizó Java 22.0.1 y Maven 3.9.9, manteniendo el proyecto compilado con `release 21`.
-
----
-
-## 26. Conclusión
-
-La versión de Semana 8 reúne en una misma solución los componentes trabajados durante las semanas anteriores y agrega dos cambios importantes: la seguridad OAuth2 centralizada y el despliegue completo con Docker Compose.
-
-Los tres BFF mantienen funciones distintas para Web, Mobile y ATM, mientras que el Core continúa concentrando las reglas bancarias y el acceso a MySQL.
-
-Resilience4j permite controlar fallas en la comunicación con el Core y Kafka mantiene desacoplado el procesamiento posterior de los movimientos. Las dos instancias de auditoría muestran que el consumo puede repartirse utilizando particiones y Consumer Groups.
-
-Finalmente, Docker Compose permite iniciar el conjunto de servicios de forma ordenada y reproducible, incluyendo MySQL, Kafka, seguridad, configuración, descubrimiento, Core, BFF y auditoría.
+La propuesta implementada en Semana 9 mejora la separación de responsabilidades del proyecto Banco XYZ y permite verificar, mediante pruebas académicas, el flujo de operaciones entre servicios, la propagación independiente de eventos y la migración paralela de información heredada. La seguridad OAuth2, los identificadores idempotentes, el patrón Outbox y Spring Batch aportan controles concretos, sin ocultar las limitaciones propias de una infraestructura local de desarrollo.
