@@ -276,6 +276,43 @@ services:
       - banco-net
     restart: on-failure
 
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    image: banco-xyz-notification-service:semana9
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      APP_DB_URL: jdbc:mysql://mysql:3306/banco_xyz_notificaciones?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - banco-net
+    restart: on-failure
+
+  risk-service:
+    build:
+      context: .
+      dockerfile: risk-service/Dockerfile
+    image: banco-xyz-risk-service:semana9
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      APP_DB_URL: jdbc:mysql://mysql:3306/banco_xyz_riesgo?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - banco-net
+    restart: on-failure
   audit-service-1:
     build:
       context: .

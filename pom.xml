@@ -54,6 +54,8 @@
         <module>bff-mobile</module>
         <module>bff-atm</module>
         <module>audit-service</module>
+        <module>risk-service</module>
+        <module>notification-service</module>
         <module>authorization-server</module>
 </modules>
 
