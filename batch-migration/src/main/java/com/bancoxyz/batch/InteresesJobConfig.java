@@ -94,11 +94,7 @@ public class InteresesJobConfig {
             @Qualifier("migrarInteresesSemana2") Step paso2,
             @Qualifier("migrarInteresesSemana3") Step paso3) {
 
-        return new JobBuilder("interesesJob", repositorio)
-                .start(paso1)
-                .next(paso2)
-                .next(paso3)
-                .build();
+        return ParallelBatchFlows.crear("interesesJob", repositorio, paso1, paso2, paso3);
     }
 
     private Step crearPaso(
@@ -202,7 +198,7 @@ public class InteresesJobConfig {
                 .build();
     }
 
-    private Registro validar(Linea linea, String semana) {
+    Registro validar(Linea linea, String semana) {
 
         try {
 

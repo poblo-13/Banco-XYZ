@@ -92,11 +92,7 @@ public class EstadosJobConfig {
             @Qualifier("migrarEstadosSemana2") Step paso2,
             @Qualifier("migrarEstadosSemana3") Step paso3) {
 
-        return new JobBuilder("estadosJob", repositorio)
-                .start(paso1)
-                .next(paso2)
-                .next(paso3)
-                .build();
+        return ParallelBatchFlows.crear("estadosJob", repositorio, paso1, paso2, paso3);
     }
 
     private Step crearPaso(
@@ -168,7 +164,7 @@ public class EstadosJobConfig {
                 .build();
     }
 
-    private Registro validar(Linea linea, String semana) {
+    Registro validar(Linea linea, String semana) {
 
         try {
             String[] campos = linea.texto().split(",", 5);

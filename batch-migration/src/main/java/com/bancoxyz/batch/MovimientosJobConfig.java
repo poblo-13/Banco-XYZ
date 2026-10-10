@@ -78,11 +78,7 @@ public class MovimientosJobConfig {
             @Qualifier("migrarMovimientosSemana2") Step paso2,
             @Qualifier("migrarMovimientosSemana3") Step paso3) {
 
-        return new JobBuilder("movimientosJob", repositorio)
-                .start(paso1)
-                .next(paso2)
-                .next(paso3)
-                .build();
+        return ParallelBatchFlows.crear("movimientosJob", repositorio, paso1, paso2, paso3);
     }
 
     private Step crearPaso(
@@ -150,7 +146,7 @@ public class MovimientosJobConfig {
                 .build();
     }
 
-    private Registro validar(Linea linea, String semana) {
+    Registro validar(Linea linea, String semana) {
 
         try {
             String[] campos = linea.texto().split(",", -1);
