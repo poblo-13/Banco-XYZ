@@ -2,6 +2,8 @@ package com.bancoxyz.payment.service;
 
 import com.bancoxyz.payment.client.CuentaClient;
 import com.bancoxyz.payment.entity.Movimiento;
+import com.bancoxyz.payment.entity.EventoMovimientoOutbox;
+import com.bancoxyz.payment.repository.EventoMovimientoOutboxRepository;
 import com.bancoxyz.payment.repository.MovimientoRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -21,15 +23,18 @@ import java.util.UUID;
 public class MovimientoService {
 
     private final MovimientoRepository repository;
+    private final EventoMovimientoOutboxRepository outboxRepository;
     private final CuentaClient cuentaClient;
     private final TransactionTemplate transaccion;
 
     public MovimientoService(
             MovimientoRepository repository,
+            EventoMovimientoOutboxRepository outboxRepository,
             CuentaClient cuentaClient,
             PlatformTransactionManager transactionManager) {
 
         this.repository = repository;
+        this.outboxRepository = outboxRepository;
         this.cuentaClient = cuentaClient;
         this.transaccion = new TransactionTemplate(transactionManager);
     }
@@ -169,6 +174,10 @@ public class MovimientoService {
             if (actual.getEstado() == Movimiento.Estado.PENDIENTE) {
                 actual.confirmar(resultado.saldoResultante());
                 repository.save(actual);
+
+                // Se guarda atomicamente con la confirmacion.
+                outboxRepository.save(
+                        new EventoMovimientoOutbox(actual));
             }
 
             return actual;
