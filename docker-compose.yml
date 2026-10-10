@@ -94,6 +94,7 @@ services:
     restart: on-failure
 
   bank-core-api:
+    profiles: ["legacy"]
     build:
       context: .
       dockerfile: bank-core-api/Dockerfile
@@ -120,20 +121,108 @@ services:
       - banco-net
     restart: on-failure
 
+  account-service:
+    build:
+      context: .
+      dockerfile: account-service/Dockerfile
+    image: banco-xyz-account-service:semana9
+    environment:
+      CONFIG_SERVER_IMPORT: configserver:http://config-server:8888
+      DB_URL: jdbc:mysql://mysql:3306/banco_xyz_cuentas?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      EUREKA_URL: http://discovery-server:8761/eureka/
+      OAUTH_ISSUER_URI: http://authorization-server:9000
+      OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
+    ports:
+      - "8084:8084"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      config-server:
+        condition: service_started
+      authorization-server:
+        condition: service_started
+    networks:
+      - banco-net
+    restart: on-failure
+
+  customer-service:
+    build:
+      context: .
+      dockerfile: customer-service/Dockerfile
+    image: banco-xyz-customer-service:semana9
+    environment:
+      CONFIG_SERVER_IMPORT: configserver:http://config-server:8888
+      DB_URL: jdbc:mysql://mysql:3306/banco_xyz_clientes?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      EUREKA_URL: http://discovery-server:8761/eureka/
+      OAUTH_ISSUER_URI: http://authorization-server:9000
+      OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
+    ports:
+      - "8085:8085"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      config-server:
+        condition: service_started
+      authorization-server:
+        condition: service_started
+    networks:
+      - banco-net
+    restart: on-failure
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    image: banco-xyz-payment-service:semana9
+    environment:
+      CONFIG_SERVER_IMPORT: configserver:http://config-server:8888
+      DB_URL: jdbc:mysql://mysql:3306/banco_xyz_pagos?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      EUREKA_URL: http://discovery-server:8761/eureka/
+      OAUTH_ISSUER_URI: http://authorization-server:9000
+      OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
+      OAUTH_PAYMENT_CLIENT_SECRET: ${OAUTH_PAYMENT_CLIENT_SECRET}
+      ACCOUNT_SERVICE_URL: http://account-service:8084
+      OAUTH_TOKEN_URL: http://authorization-server:9000/oauth2/token
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    ports:
+      - "8086:8086"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      account-service:
+        condition: service_started
+      authorization-server:
+        condition: service_started
+    networks:
+      - banco-net
+    restart: on-failure
+
   bff-web:
     build:
       context: .
       dockerfile: bff-web/Dockerfile
-    image: banco-xyz-bff-web:semana8
+    image: banco-xyz-bff-web:semana9
     environment:
-      CORE_API_BASE_URL: http://bank-core-api:8080
+      ACCOUNT_SERVICE_URL: http://account-service:8084
+      CUSTOMER_SERVICE_URL: http://customer-service:8085
+      PAYMENT_SERVICE_URL: http://payment-service:8086
       OAUTH_ISSUER_URI: http://authorization-server:9000
       OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
       SSL_ENABLED: "false"
     ports:
-      - "8081:8081"
+      - "8181:8081"
     depends_on:
-      - bank-core-api
+      - account-service
+      - customer-service
+      - payment-service
       - authorization-server
     networks:
       - banco-net
@@ -143,16 +232,20 @@ services:
     build:
       context: .
       dockerfile: bff-mobile/Dockerfile
-    image: banco-xyz-bff-mobile:semana8
+    image: banco-xyz-bff-mobile:semana9
     environment:
-      CORE_API_BASE_URL: http://bank-core-api:8080
+      ACCOUNT_SERVICE_URL: http://account-service:8084
+      CUSTOMER_SERVICE_URL: http://customer-service:8085
+      PAYMENT_SERVICE_URL: http://payment-service:8086
       OAUTH_ISSUER_URI: http://authorization-server:9000
       OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
       SSL_ENABLED: "false"
     ports:
       - "8082:8082"
     depends_on:
-      - bank-core-api
+      - account-service
+      - customer-service
+      - payment-service
       - authorization-server
     networks:
       - banco-net
@@ -162,16 +255,22 @@ services:
     build:
       context: .
       dockerfile: bff-atm/Dockerfile
-    image: banco-xyz-bff-atm:semana8
+    image: banco-xyz-bff-atm:semana9
     environment:
-      CORE_API_BASE_URL: http://bank-core-api:8080
+      ACCOUNT_SERVICE_URL: http://account-service:8084
+      CUSTOMER_SERVICE_URL: http://customer-service:8085
+      PAYMENT_SERVICE_URL: http://payment-service:8086
       OAUTH_ISSUER_URI: http://authorization-server:9000
       OAUTH_JWK_SET_URI: http://authorization-server:9000/oauth2/jwks
       SSL_ENABLED: "false"
+      OAUTH_TOKEN_URL: http://authorization-server:9000/oauth2/token
+      OAUTH_ATM_INTERNAL_CLIENT_SECRET: ${OAUTH_ATM_INTERNAL_CLIENT_SECRET}
     ports:
       - "8083:8083"
     depends_on:
-      - bank-core-api
+      - account-service
+      - customer-service
+      - payment-service
       - authorization-server
     networks:
       - banco-net
@@ -181,7 +280,7 @@ services:
     build:
       context: .
       dockerfile: audit-service/Dockerfile
-    image: banco-xyz-audit-service:semana8
+    image: banco-xyz-audit-service:semana9
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AUDIT_INSTANCE: auditoria-1
@@ -201,7 +300,7 @@ services:
     build:
       context: .
       dockerfile: audit-service/Dockerfile
-    image: banco-xyz-audit-service:semana8
+    image: banco-xyz-audit-service:semana9
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AUDIT_INSTANCE: auditoria-2
