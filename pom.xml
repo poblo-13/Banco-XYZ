@@ -49,6 +49,7 @@
         <module>account-service</module>
         <module>customer-service</module>
         <module>payment-service</module>
+        <module>batch-migration</module>
         <module>bff-web</module>
         <module>bff-mobile</module>
         <module>bff-atm</module>
