@@ -185,7 +185,12 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AUDIT_INSTANCE: auditoria-1
+      AUDIT_DB_URL: jdbc:mysql://mysql:3306/banco_xyz_auditoria?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
     depends_on:
+      mysql:
+        condition: service_healthy
       kafka:
         condition: service_healthy
     networks:
@@ -200,7 +205,12 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AUDIT_INSTANCE: auditoria-2
+      AUDIT_DB_URL: jdbc:mysql://mysql:3306/banco_xyz_auditoria?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
     depends_on:
+      mysql:
+        condition: service_healthy
       kafka:
         condition: service_healthy
     networks:
